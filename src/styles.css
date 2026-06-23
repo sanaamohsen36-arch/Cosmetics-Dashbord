@@ -209,6 +209,90 @@ input[type="file"] {
   box-shadow: 0 18px 44px rgba(0, 0, 0, 0.18);
 }
 
+.monthly-control-shell {
+  margin: 0;
+  padding: 24px;
+  border-bottom: 1px solid #1f2a3b;
+  background: #071018;
+  display: grid;
+  gap: 16px;
+}
+
+.monthly-control-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.monthly-control-header h1,
+.monthly-control-header p {
+  margin: 0;
+}
+
+.monthly-control-header p:not(.eyebrow) {
+  color: #bae6fd;
+  margin-top: 8px;
+}
+
+.monthly-control-header label {
+  display: grid;
+  gap: 6px;
+  min-width: 190px;
+  color: #b8c4d4;
+  font-size: 13px;
+}
+
+.monthly-control-summary,
+.monthly-preview {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.monthly-control-summary span,
+.monthly-preview div {
+  border: 1px solid #1f2a3b;
+  border-radius: 8px;
+  background: #0d1623;
+  padding: 12px;
+  color: #dbeafe;
+}
+
+.monthly-preview strong,
+.monthly-preview span {
+  display: block;
+}
+
+.monthly-preview span {
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+.monthly-upload-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  gap: 10px;
+  align-items: stretch;
+}
+
+.monthly-drop {
+  min-height: 56px;
+  border: 1px dashed #334155;
+  border-radius: 8px;
+  background: #0a1320;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.monthly-drop input {
+  direction: ltr;
+  max-width: 230px;
+}
+
 .section-title {
   display: flex;
   gap: 12px;
@@ -473,6 +557,12 @@ tr.suspicious td {
   }
 
   .ads-upload-card {
+    grid-template-columns: 1fr;
+  }
+
+  .monthly-upload-row,
+  .monthly-control-summary,
+  .monthly-preview {
     grid-template-columns: 1fr;
   }
 

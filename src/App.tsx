@@ -209,6 +209,10 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
 
   const handleSalesFile = (file: File | null) => {
     setSalesFile(file);
+    setPeoplePreview([]);
+    setPlatformPreview([]);
+    setOcrText("");
+    setOcrProgress("");
     if (file) setSalesDate(inferDateFromFileName(file.name));
   };
 
@@ -229,7 +233,11 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
       const parsed = parseSalesOcrText(text, salesDate, sourceFileId);
       setPeoplePreview(parsed.people);
       setPlatformPreview(parsed.platforms);
-      setOcrProgress(parsed.people.length || parsed.platforms.length ? "تم استخراج البيانات. راجع الجدول قبل الحفظ." : "لم يتم استخراج صفوف كافية. يمكن إدخالها يدويًا أو تحميل نموذج.");
+      setOcrProgress(
+        parsed.people.length || parsed.platforms.length
+          ? "تم استخراج البيانات. راجع الجدول قبل الحفظ."
+          : "قراءة OCR غير موثوقة، فلم يتم ملء الجدول حتى لا تُحفظ بيانات غلط. استخدمي تحميل نموذج ثم عدلي الأرقام."
+      );
     } catch (error) {
       setOcrProgress(error instanceof Error ? error.message : "تعذر تشغيل OCR");
     }
@@ -243,6 +251,14 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
   };
 
   const saveSales = async () => {
+    const normalizedPeople = peoplePreview.map((row) => normalizePerson({ ...row, reportDate: salesDate, sourceFileId }));
+    const normalizedPlatforms = platformPreview.map((row) => normalizePlatform({ ...row, reportDate: salesDate, sourceFileId }));
+    const hasSalesValues = [...normalizedPeople, ...normalizedPlatforms].some((row) => row.totalOrders > 0 || row.totalRevenue > 0);
+    if (!hasSalesValues) {
+      setOcrProgress("لا يمكن حفظ تقرير فاضي. راجعي المعاينة أو اكتبي أرقام اليوم أولًا.");
+      return;
+    }
+
     const now = new Date().toISOString();
     const rawFile: SalesRawFile = {
       id: sourceFileId,
@@ -256,8 +272,8 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
     const next = await saveSalesUpload(
       data,
       rawFile,
-      peoplePreview.map(normalizePerson),
-      platformPreview.map(normalizePlatform),
+      normalizedPeople,
+      normalizedPlatforms,
       existingSalesDate ? salesMode : "merge"
     );
     setOcrProgress("جاري حفظ تقرير المبيعات على Supabase...");

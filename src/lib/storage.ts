@@ -17,6 +17,7 @@ const defaultPlatforms = [
   "ريجينكس",
   "ريجينكس eg",
   "واتس اب ريجينكس",
+  "انستجرام",
   "إجمالي السوشيال",
   "تليفون إعلان",
   "تيم المتابعة",
@@ -109,8 +110,9 @@ export const subscribeToDataChanges = (onChange: () => void) => {
 
   const activeSupabase = supabase;
 
+  const channelName = `dashboard-db-changes-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const channel = activeSupabase
-    .channel("dashboard-db-changes")
+    .channel(channelName)
     .on("postgres_changes", { event: "*", schema: "public", table: "sales_raw_files" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "sales_by_salesperson" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "sales_by_platform" }, onChange)
