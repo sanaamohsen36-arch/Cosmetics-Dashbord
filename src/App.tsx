@@ -145,7 +145,7 @@ export default function App() {
           <DateControls range={range} setRange={setRange} />
         </header>
 
-        {page === "upload" && <UploadPage data={data} commitData={commitData} />}
+        {page === "upload" && <UploadPage data={data} commitData={commitData} setRange={setRange} />}
         {page === "dashboard" && <DashboardPage kpis={kpis} people={scopedPeople} platforms={scopedPlatforms} ads={scopedAds} />}
         {page === "salespeople" && (
           <SalespeoplePage rows={aggregatePeople(scopedPeople)} totalOrders={kpis.totalOrders} totalRevenue={kpis.totalSalesRevenue} query={query} setQuery={setQuery} />
@@ -198,7 +198,7 @@ function DateControls({ range, setRange }: { range: DateRange; setRange: (range:
   );
 }
 
-function UploadPage({ data, commitData }: { data: AppData; commitData: CommitData }) {
+function UploadPage({ data, commitData, setRange }: { data: AppData; commitData: CommitData; setRange: (range: DateRange) => void }) {
   const [salesFile, setSalesFile] = useState<File | null>(null);
   const [salesDate, setSalesDate] = useState(today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
@@ -214,6 +214,11 @@ function UploadPage({ data, commitData }: { data: AppData; commitData: CommitDat
 
   const sourceFileId = useMemo(() => createId(), [salesFile?.name]);
   const existingSalesDate = data.salesBySalesperson.some((row) => row.reportDate === salesDate);
+  const selectedMonth = salesDate.slice(0, 7);
+
+  useEffect(() => {
+    setSalesMode(existingSalesDate ? "replace" : "merge");
+  }, [existingSalesDate, salesDate]);
 
   const runOcr = async () => {
     if (!salesFile) return;
@@ -257,11 +262,31 @@ function UploadPage({ data, commitData }: { data: AppData; commitData: CommitDat
     );
     setOcrProgress("جاري حفظ تقرير المبيعات على Supabase...");
     await commitData(next);
+    setRange({ from: salesDate, to: salesDate });
     setOcrProgress("تم حفظ تقرير المبيعات وتحديث اللوحة.");
+  };
+
+  const selectSalesDay = (date: string) => {
+    setSalesDate(date);
+    setRange({ from: date, to: date });
   };
 
   return (
     <section className="content-grid">
+      <div className="panel wide">
+        <MonthSalesCalendar
+          month={selectedMonth}
+          selectedDate={salesDate}
+          data={data}
+          onSelectDate={selectSalesDay}
+          onChangeMonth={(month) => {
+            const nextDate = `${month}-01`;
+            setSalesDate(nextDate);
+            setRange({ from: nextDate, to: endOfMonth(nextDate) });
+          }}
+        />
+      </div>
+
       <div className="panel upload-panel">
         <div className="section-title">
           <UploadCloud />
@@ -281,9 +306,9 @@ function UploadPage({ data, commitData }: { data: AppData; commitData: CommitDat
           </label>
           {existingSalesDate && (
             <label>
-              نفس التاريخ موجود
+              نفس اليوم مرفوع
               <select value={salesMode} onChange={(event) => setSalesMode(event.target.value as UploadMode)}>
-                <option value="replace">استبدال</option>
+                <option value="replace">استبدال صورة اليوم</option>
                 <option value="merge">دمج</option>
                 <option value="cancel">إلغاء</option>
               </select>
@@ -324,6 +349,65 @@ function UploadPage({ data, commitData }: { data: AppData; commitData: CommitDat
         <EditablePlatformTable rows={platformPreview} setRows={setPlatformPreview} />
       </div>
     </section>
+  );
+}
+
+function MonthSalesCalendar({
+  month,
+  selectedDate,
+  data,
+  onSelectDate,
+  onChangeMonth
+}: {
+  month: string;
+  selectedDate: string;
+  data: AppData;
+  onSelectDate: (date: string) => void;
+  onChangeMonth: (month: string) => void;
+}) {
+  const days = getMonthDays(month);
+  const uploadedDays = new Set(data.salesRawFiles.map((file) => file.reportDate));
+  const savedDays = new Set(data.salesBySalesperson.map((row) => row.reportDate));
+  const monthUploadedCount = days.filter((date) => uploadedDays.has(date) || savedDays.has(date)).length;
+
+  return (
+    <div className="month-sales">
+      <div className="section-title">
+        <CalendarDays />
+        <div>
+          <h2>تقسيمة رفع مبيعات الشهر</h2>
+          <p>اختاري يوم واحد، ارفعي صورة التقفيل الخاصة به، وبعد الحفظ يظهر اليوم هنا ويتحدث الداشبورد تلقائيًا.</p>
+        </div>
+      </div>
+      <div className="month-toolbar">
+        <label>
+          الشهر
+          <input type="month" value={month} onChange={(event) => onChangeMonth(event.target.value)} />
+        </label>
+        <Badge text={`${monthUploadedCount} يوم مرفوع من ${days.length}`} />
+      </div>
+      <div className="month-grid">
+        {days.map((date) => {
+          const summary = getSalesDaySummary(data, date);
+          const isUploaded = uploadedDays.has(date) || savedDays.has(date);
+          const isSelected = selectedDate === date;
+
+          return (
+            <button
+              key={date}
+              className={`month-day ${isUploaded ? "uploaded" : "missing"} ${isSelected ? "selected" : ""}`}
+              onClick={() => onSelectDate(date)}
+            >
+              <span className="day-name">{formatWeekday(date)}</span>
+              <strong>{Number(date.slice(-2))}</strong>
+              <small>{isUploaded ? "مرفوع" : "ناقص"}</small>
+              <em>{integer(summary.orders)} طلب</em>
+              <em>{money(summary.revenue)}</em>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
@@ -970,6 +1054,31 @@ function TableHeader({ title, query, setQuery, onExport }: { title: string; quer
 function Badge({ text }: { text: string }) {
   return <span className="badge">{text}</span>;
 }
+
+const getMonthDays = (month: string) => {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const daysInMonth = new Date(year, monthNumber, 0).getDate();
+  return Array.from({ length: daysInMonth }, (_, index) => formatDateParts(year, monthNumber, index + 1));
+};
+
+const endOfMonth = (date: string) => {
+  const [year, monthNumber] = date.slice(0, 7).split("-").map(Number);
+  return formatDateParts(year, monthNumber, new Date(year, monthNumber, 0).getDate());
+};
+
+const formatDateParts = (year: number, monthNumber: number, day: number) =>
+  `${year}-${String(monthNumber).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+const formatWeekday = (date: string) =>
+  new Intl.DateTimeFormat("ar-EG", { weekday: "short" }).format(new Date(`${date}T12:00:00`));
+
+const getSalesDaySummary = (data: AppData, date: string) => {
+  const rows = data.salesBySalesperson.filter((row) => row.reportDate === date);
+  return {
+    orders: rows.reduce((total, row) => total + row.totalOrders, 0),
+    revenue: rows.reduce((total, row) => total + row.totalRevenue, 0)
+  };
+};
 
 const numericField = (field: string) => /Orders|Revenue|spend|impressions|reach|clicks|ctr|cpc|cpm|leads|purchases|Value/.test(field);
 
