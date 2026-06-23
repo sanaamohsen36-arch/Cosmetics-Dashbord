@@ -5,6 +5,30 @@ import { createId } from "./storage";
 
 const currentYear = new Date().getFullYear();
 
+export interface OcrWord {
+  text: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+export interface SalesOcrResult {
+  text: string;
+  words: OcrWord[];
+}
+
+interface ParsedNumericCells {
+  morningOrders: number;
+  morningRevenue: number;
+  eveningOrders: number;
+  eveningRevenue: number;
+  reportTotalOrders: number;
+  reportTotalRevenue: number;
+}
+
+type NumericColumnMap = Record<keyof ParsedNumericCells, [number, number]>;
+
 export const inferDateFromFileName = (fileName: string): string => {
   const normalized = fileName.replace(/[_.]/g, "-");
   const ymd = normalized.match(/(20\d{2})[-/ :](\d{1,2})[-/ :](\d{1,2})/);
@@ -28,6 +52,8 @@ const toISODate = (year: number, month: number, day: number) => {
 const toNumber = (value: unknown): number => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   const text = String(value ?? "")
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
     .replace(/[٬,]/g, "")
     .replace(/[^\d.-]/g, "");
   const number = Number(text);
@@ -46,95 +72,232 @@ export const runArabicOcr = async (file: File, onProgress: (message: string, pro
       if (event.status) onProgress(event.status, Math.round((event.progress || 0) * 100));
     }
   });
-  return result.data.text;
+  const data = result.data as unknown as { text?: string; words?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }> };
+  return {
+    text: data.text ?? "",
+    words: (data.words ?? [])
+      .filter((word) => word.text?.trim() && word.bbox)
+      .map((word) => ({
+        text: cleanText(word.text ?? ""),
+        x0: word.bbox?.x0 ?? 0,
+        y0: word.bbox?.y0 ?? 0,
+        x1: word.bbox?.x1 ?? 0,
+        y1: word.bbox?.y1 ?? 0
+      }))
+  };
 };
 
 export const parseSalesOcrText = (
-  text: string,
+  ocr: SalesOcrResult,
   reportDate: string,
   sourceFileId: string
 ): { people: SalesBySalesperson[]; platforms: SalesByPlatform[] } => {
   const now = new Date().toISOString();
-  const lines = text
-    .split(/\n+/)
-    .map(cleanText)
-    .filter(Boolean);
-
-  const people: SalesBySalesperson[] = [];
-  const platforms: SalesByPlatform[] = [];
-
-  for (const line of lines) {
-    const numbers = [...line.matchAll(/\d+(?:[.,]\d+)?/g)].map((item) => toNumber(item[0]));
-    const words = line
-      .replace(/\d+(?:[.,]\d+)?/g, " ")
-      .replace(/[A-Za-z]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!words || numbers.length < 2) continue;
-    if (/اجمالي|إجمالي|اليوم|السيليز|المبيعات|الصفحات|قيمة|عدد/.test(words)) continue;
-
-    if (numbers.length >= 6 && words.length > 2) {
-      const [code, morningOrders, morningRevenue, eveningOrders, eveningRevenue] = normalizePersonNumbers(numbers);
-      people.push({
-        id: createId(),
-        reportDate,
-        salespersonName: words,
-        salespersonCode: String(code || ""),
-        morningOrders,
-        morningRevenue,
-        eveningOrders,
-        eveningRevenue,
-        totalOrders: morningOrders + eveningOrders,
-        totalRevenue: morningRevenue + eveningRevenue,
-        sourceFileId,
-        createdAt: now
-      });
-      continue;
-    }
-
-    if (numbers.length >= 4 && words.length > 2) {
-      const [morningOrders, morningRevenue, eveningOrders, eveningRevenue] = normalizePlatformNumbers(numbers);
-      platforms.push({
-        id: createId(),
-        reportDate,
-        platformName: words,
-        morningOrders,
-        morningRevenue,
-        eveningOrders,
-        eveningRevenue,
-        totalOrders: morningOrders + eveningOrders,
-        totalRevenue: morningRevenue + eveningRevenue,
-        sourceFileId,
-        createdAt: now
-      });
-    }
-  }
+  const words = ocr.words.filter((word) => word.text);
+  const bounds = getWordBounds(words);
+  const people = parseSalespersonGrid(words, bounds, reportDate, sourceFileId, now);
+  const platforms = parsePlatformGrid(words, bounds, reportDate, sourceFileId, now);
 
   return { people, platforms };
 };
 
-const normalizePersonNumbers = (numbers: number[]) => {
-  const code = numbers.find((number) => number > 0 && number < 1000) ?? 0;
-  const orderCandidates = numbers.filter((number) => number >= 0 && number < 1000);
-  const revenueCandidates = numbers.filter((number) => number >= 1000);
-  const morningOrders = orderCandidates[1] ?? orderCandidates[0] ?? 0;
-  const eveningOrders = orderCandidates[2] ?? 0;
-  const morningRevenue = revenueCandidates[0] ?? 0;
-  const eveningRevenue = revenueCandidates[1] ?? 0;
-  return [code, morningOrders, morningRevenue, eveningOrders, eveningRevenue];
+const getWordBounds = (words: OcrWord[]) => ({
+  width: Math.max(...words.map((word) => word.x1), 1),
+  height: Math.max(...words.map((word) => word.y1), 1)
+});
+
+const parseSalespersonGrid = (
+  words: OcrWord[],
+  bounds: { width: number; height: number },
+  reportDate: string,
+  sourceFileId: string,
+  createdAt: string
+): SalesBySalesperson[] => {
+  const columns = {
+    reportTotalRevenue: [0.478, 0.535],
+    reportTotalOrders: [0.535, 0.585],
+    eveningRevenue: [0.585, 0.638],
+    eveningOrders: [0.638, 0.689],
+    morningRevenue: [0.689, 0.748],
+    morningOrders: [0.748, 0.81],
+    name: [0.81, 0.935],
+    code: [0.935, 0.982]
+  } satisfies Record<string, [number, number]>;
+  const rows = groupGridRows(words, bounds, { xMin: 0.478, xMax: 0.982, yMin: 0.13, yMax: 0.945 });
+
+  return rows
+    .map((rowWords) => {
+      const salespersonName = cellText(rowWords, bounds.width, columns.name);
+      const salespersonCode = String(cellNumber(rowWords, bounds.width, columns.code) || "");
+      const parsedCells = parseNumericCells(rowWords, bounds.width, columns);
+      const { morningOrders, morningRevenue, eveningOrders, eveningRevenue } = parsedCells;
+      const totalOrders = morningOrders + eveningOrders;
+      const totalRevenue = morningRevenue + eveningRevenue;
+
+      validateReportTotals("salesperson", salespersonName, parsedCells, totalOrders, totalRevenue);
+
+      return {
+        id: createId(),
+        reportDate,
+        salespersonName,
+        salespersonCode,
+        morningOrders,
+        morningRevenue,
+        eveningOrders,
+        eveningRevenue,
+        totalOrders,
+        totalRevenue,
+        sourceFileId,
+        createdAt
+      };
+    })
+    .filter((row) => isValidSalespersonRow(row.salespersonName, row.salespersonCode, row.totalOrders, row.totalRevenue));
 };
 
-const normalizePlatformNumbers = (numbers: number[]) => {
-  const orderCandidates = numbers.filter((number) => number >= 0 && number < 1000);
-  const revenueCandidates = numbers.filter((number) => number >= 1000);
-  return [
-    orderCandidates[0] ?? 0,
-    revenueCandidates[0] ?? 0,
-    orderCandidates[1] ?? 0,
-    revenueCandidates[1] ?? 0
-  ];
+const parsePlatformGrid = (
+  words: OcrWord[],
+  bounds: { width: number; height: number },
+  reportDate: string,
+  sourceFileId: string,
+  createdAt: string
+): SalesByPlatform[] => {
+  const columns = {
+    reportTotalRevenue: [0.0, 0.071],
+    reportTotalOrders: [0.071, 0.142],
+    eveningRevenue: [0.142, 0.195],
+    eveningOrders: [0.195, 0.247],
+    morningRevenue: [0.247, 0.31],
+    morningOrders: [0.31, 0.372],
+    name: [0.372, 0.477]
+  } satisfies Record<string, [number, number]>;
+  const rows = groupGridRows(words, bounds, { xMin: 0.0, xMax: 0.477, yMin: 0.18, yMax: 0.50 });
+
+  return rows
+    .map((rowWords) => {
+      const platformName = cellText(rowWords, bounds.width, columns.name);
+      const parsedCells = parseNumericCells(rowWords, bounds.width, columns);
+      const { morningOrders, morningRevenue, eveningOrders, eveningRevenue } = parsedCells;
+      const totalOrders = morningOrders + eveningOrders;
+      const totalRevenue = morningRevenue + eveningRevenue;
+
+      validateReportTotals("platform", platformName, parsedCells, totalOrders, totalRevenue);
+
+      return {
+        id: createId(),
+        reportDate,
+        platformName,
+        morningOrders,
+        morningRevenue,
+        eveningOrders,
+        eveningRevenue,
+        totalOrders,
+        totalRevenue,
+        sourceFileId,
+        createdAt
+      };
+    })
+    .filter((row) => isValidPlatformRow(row.platformName, row.totalOrders, row.totalRevenue));
 };
+
+const groupGridRows = (
+  words: OcrWord[],
+  bounds: { width: number; height: number },
+  area: { xMin: number; xMax: number; yMin: number; yMax: number }
+) => {
+  const rowWords = words
+    .filter((word) => {
+      const cx = centerX(word) / bounds.width;
+      const cy = centerY(word) / bounds.height;
+      return cx >= area.xMin && cx <= area.xMax && cy >= area.yMin && cy <= area.yMax;
+    })
+    .sort((a, b) => centerY(a) - centerY(b));
+
+  const tolerance = bounds.height * 0.026;
+  const rows: OcrWord[][] = [];
+  for (const word of rowWords) {
+    const existing = rows.find((row) => Math.abs(avgY(row) - centerY(word)) <= tolerance);
+    if (existing) {
+      existing.push(word);
+    } else {
+      rows.push([word]);
+    }
+  }
+
+  return rows
+    .map((row) => row.sort((a, b) => centerX(b) - centerX(a)))
+    .filter((row) => row.length >= 2);
+};
+
+const cellWords = (rowWords: OcrWord[], width: number, range: [number, number]) =>
+  rowWords.filter((word) => {
+    const cx = centerX(word) / width;
+    return cx >= range[0] && cx < range[1];
+  });
+
+const cellText = (rowWords: OcrWord[], width: number, range: [number, number]) =>
+  cellWords(rowWords, width, range)
+    .sort((a, b) => centerX(b) - centerX(a))
+    .map((word) => word.text)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const cellNumber = (rowWords: OcrWord[], width: number, range: [number, number]) => {
+  const text = cellWords(rowWords, width, range)
+    .sort((a, b) => centerX(a) - centerX(b))
+    .map((word) => word.text)
+    .join("");
+  return toNumber(text);
+};
+
+const parseNumericCells = (
+  rowWords: OcrWord[],
+  width: number,
+  columns: NumericColumnMap
+): ParsedNumericCells => ({
+  morningOrders: cellNumber(rowWords, width, columns.morningOrders),
+  morningRevenue: cellNumber(rowWords, width, columns.morningRevenue),
+  eveningOrders: cellNumber(rowWords, width, columns.eveningOrders),
+  eveningRevenue: cellNumber(rowWords, width, columns.eveningRevenue),
+  reportTotalOrders: cellNumber(rowWords, width, columns.reportTotalOrders),
+  reportTotalRevenue: cellNumber(rowWords, width, columns.reportTotalRevenue)
+});
+
+const validateReportTotals = (
+  table: "salesperson" | "platform",
+  label: string,
+  parsedCells: ParsedNumericCells,
+  calculatedOrders: number,
+  calculatedRevenue: number
+) => {
+  const hasReportOrderTotal = parsedCells.reportTotalOrders > 0;
+  const hasReportRevenueTotal = parsedCells.reportTotalRevenue > 0;
+  const orderMismatch = hasReportOrderTotal && parsedCells.reportTotalOrders !== calculatedOrders;
+  const revenueMismatch = hasReportRevenueTotal && parsedCells.reportTotalRevenue !== calculatedRevenue;
+
+  if (orderMismatch || revenueMismatch) {
+    console.warn("OCR table total mismatch", {
+      table,
+      label,
+      reportTotalOrders: parsedCells.reportTotalOrders,
+      calculatedOrders,
+      reportTotalRevenue: parsedCells.reportTotalRevenue,
+      calculatedRevenue
+    });
+  }
+};
+
+const centerX = (word: OcrWord) => (word.x0 + word.x1) / 2;
+const centerY = (word: OcrWord) => (word.y0 + word.y1) / 2;
+const avgY = (words: OcrWord[]) => words.reduce((total, word) => total + centerY(word), 0) / Math.max(words.length, 1);
+const isSalespersonHeaderText = (text: string) =>
+  /السيليز|السيلز|المبيعات|كود|الأوردرات|الاوردرات|صباحي|مسائي|إجمالي مبيعات|اجمالي مبيعات/.test(text);
+const isPlatformHeaderText = (text: string) =>
+  /الصفحة|الصفحات|إجمالي اليوم|اجمالي اليوم|الأوردرات|الاوردرات|صباحي|مسائي/.test(text);
+const isValidSalespersonRow = (name: string, code: string, totalOrders: number, totalRevenue: number) =>
+  Boolean(name && code && !isSalespersonHeaderText(name) && (totalOrders > 0 || totalRevenue > 0));
+const isValidPlatformRow = (name: string, totalOrders: number, totalRevenue: number) =>
+  Boolean(name && !isPlatformHeaderText(name) && (totalOrders > 0 || totalRevenue > 0));
 
 const aliases: Record<string, string[]> = {
   reportDate: ["date", "day", "التاريخ", "اليوم"],
