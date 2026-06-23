@@ -148,4 +148,7 @@ const loadLocalData = (): AppData => {
   }
 };
 
-const saveLocalData
+const saveLocalData = (data: AppData) => {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  window.dispatchEvent(new CustomEvent("dashboard-data-updated"));
+};
