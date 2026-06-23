@@ -66,6 +66,8 @@ const cleanText = (value: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
+let latestSalesOcrResult: SalesOcrResult = { text: "", words: [] };
+
 export const runArabicOcr = async (file: File, onProgress: (message: string, progress: number) => void) => {
   const result = await Tesseract.recognize(file, "ara+eng", {
     logger: (event) => {
@@ -73,7 +75,7 @@ export const runArabicOcr = async (file: File, onProgress: (message: string, pro
     }
   });
   const data = result.data as unknown as { text?: string; words?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }> };
-  return {
+  latestSalesOcrResult = {
     text: data.text ?? "",
     words: (data.words ?? [])
       .filter((word) => word.text?.trim() && word.bbox)
@@ -85,15 +87,17 @@ export const runArabicOcr = async (file: File, onProgress: (message: string, pro
         y1: word.bbox?.y1 ?? 0
       }))
   };
+  return latestSalesOcrResult.text;
 };
 
 export const parseSalesOcrText = (
-  ocr: SalesOcrResult,
+  ocr: SalesOcrResult | string,
   reportDate: string,
   sourceFileId: string
 ): { people: SalesBySalesperson[]; platforms: SalesByPlatform[] } => {
   const now = new Date().toISOString();
-  const words = ocr.words.filter((word) => word.text);
+  const result = typeof ocr === "string" ? latestSalesOcrResult : ocr;
+  const words = result.words.filter((word) => word.text);
   const bounds = getWordBounds(words);
   const people = parseSalespersonGrid(words, bounds, reportDate, sourceFileId, now);
   const platforms = parsePlatformGrid(words, bounds, reportDate, sourceFileId, now);
