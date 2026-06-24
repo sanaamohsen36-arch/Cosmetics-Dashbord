@@ -112,6 +112,7 @@ export const saveData = async (data: AppData) => {
   await insertRows("ads_raw_files", data.adsRawFiles.map(toAdsRawFileRow));
   await insertRows("meta_ads", data.metaAds.map(toMetaAdsRow));
   await insertRows("tiktok_ads", data.tiktokAds.map(toTikTokAdsRow));
+  await refreshDailySummary(data);
 };
 
 export const subscribeToDataChanges = (onChange: () => void) => {
@@ -199,6 +200,7 @@ const deleteAll = async (table: string) => {
 };
 
 const deleteAllTables = async () => {
+  await deleteAll("daily_summary");
   await deleteAll("meta_ads");
   await deleteAll("tiktok_ads");
   await deleteAll("ads_raw_files");
@@ -206,6 +208,44 @@ const deleteAllTables = async () => {
   await deleteAll("sales_by_salesperson");
   await deleteAll("sales_raw_files");
   await deleteAll("platform_settings");
+};
+
+const refreshDailySummary = async (data: AppData) => {
+  if (!supabase) return;
+  await deleteAll("daily_summary");
+  const dates = new Set([
+    ...data.salesBySalesperson.map((row) => row.reportDate),
+    ...data.metaAds.map((row) => row.reportDate),
+    ...data.tiktokAds.map((row) => row.reportDate)
+  ]);
+  const now = new Date().toISOString();
+  const rows = [...dates].map((reportDate) => {
+    const people = data.salesBySalesperson.filter((row) => row.reportDate === reportDate);
+    const metaRows = data.metaAds.filter((row) => row.reportDate === reportDate);
+    const tiktokRows = data.tiktokAds.filter((row) => row.reportDate === reportDate);
+    const totalSalesRevenue = people.reduce((total, row) => total + row.totalRevenue, 0);
+    const totalOrders = people.reduce((total, row) => total + row.totalOrders, 0);
+    const metaSpend = metaRows.reduce((total, row) => total + row.spend, 0);
+    const tiktokSpend = tiktokRows.reduce((total, row) => total + row.spend, 0);
+    const totalAdsSpend = metaSpend + tiktokSpend;
+    return {
+      id: `summary-${reportDate}`,
+      report_date: reportDate,
+      total_sales_revenue: totalSalesRevenue,
+      total_orders: totalOrders,
+      total_ads_spend: totalAdsSpend,
+      meta_spend: metaSpend,
+      tiktok_spend: tiktokSpend,
+      roas: totalAdsSpend ? totalSalesRevenue / totalAdsSpend : null,
+      roi: totalAdsSpend ? ((totalSalesRevenue - totalAdsSpend) / totalAdsSpend) * 100 : null,
+      cpa: totalOrders ? totalAdsSpend / totalOrders : null,
+      average_order_value: totalOrders ? totalSalesRevenue / totalOrders : null,
+      spend_to_sales_ratio: totalSalesRevenue ? (totalAdsSpend / totalSalesRevenue) * 100 : null,
+      created_at: now,
+      updated_at: now
+    };
+  });
+  await insertRows("daily_summary", rows);
 };
 
 const ensureDefaultPlatforms = async () => {
@@ -303,16 +343,14 @@ export const saveAdsUpload = async (
               !(
                 file.reportDate === rawFile.reportDate &&
                 file.adsPlatform === platform &&
-                file.salesPlatformName === rawFile.salesPlatformName &&
-                (file.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
+                file.salesPlatformName === rawFile.salesPlatformName
               )
           ),
           [tableKey]: current[tableKey].filter(
             (row) =>
               !(
                 row.reportDate === rawFile.reportDate &&
-                row.salesPlatformName === rawFile.salesPlatformName &&
-                (row.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
+                row.salesPlatformName === rawFile.salesPlatformName
               )
           )
         }
@@ -335,7 +373,6 @@ export const saveAdsUpload = async (
         .eq("report_date", rawFile.reportDate)
         .eq("ads_platform", platform)
         .eq("sales_platform_name", rawFile.salesPlatformName)
-        .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
     );
 
     if (platform === "Meta") {
@@ -343,14 +380,12 @@ export const saveAdsUpload = async (
         query
           .eq("report_date", rawFile.reportDate)
           .eq("sales_platform_name", rawFile.salesPlatformName)
-          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
       );
     } else {
       await deleteWhere("tiktok_ads", (query) =>
         query
           .eq("report_date", rawFile.reportDate)
           .eq("sales_platform_name", rawFile.salesPlatformName)
-          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
       );
     }
   }
@@ -365,6 +400,80 @@ export const saveAdsUpload = async (
 
   return next;
 };
+
+export const deleteDataForDate = async (current: AppData, reportDate: string): Promise<AppData> => {
+  const next = removeDataForDate(current, reportDate);
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+
+  await deleteWhere("meta_ads", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("tiktok_ads", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("ads_raw_files", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("sales_by_platform", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("sales_raw_files", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  return next;
+};
+
+export const deleteAdsForDate = async (current: AppData, reportDate: string, platform: AdsPlatform): Promise<AppData> => {
+  const tableKey = platform === "Meta" ? "metaAds" : "tiktokAds";
+  const next = {
+    ...current,
+    adsRawFiles: current.adsRawFiles.filter((file) => !(file.reportDate === reportDate && file.adsPlatform === platform)),
+    [tableKey]: current[tableKey].filter((row) => row.reportDate !== reportDate)
+  };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await deleteWhere("ads_raw_files", (query) => query.eq("report_date", reportDate).eq("ads_platform", platform));
+  await deleteWhere(platform === "Meta" ? "meta_ads" : "tiktok_ads", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  return next;
+};
+
+export const deleteRawFile = async (current: AppData, rawFileId: string): Promise<AppData> => {
+  const salesFile = current.salesRawFiles.find((file) => file.id === rawFileId);
+  const adsFile = current.adsRawFiles.find((file) => file.id === rawFileId);
+  const next = {
+    ...current,
+    salesRawFiles: current.salesRawFiles.filter((file) => file.id !== rawFileId),
+    salesBySalesperson: current.salesBySalesperson.filter((row) => row.sourceFileId !== rawFileId),
+    salesByPlatform: current.salesByPlatform.filter((row) => row.sourceFileId !== rawFileId),
+    adsRawFiles: current.adsRawFiles.filter((file) => file.id !== rawFileId),
+    metaAds: current.metaAds.filter((row) => row.sourceFileId !== rawFileId),
+    tiktokAds: current.tiktokAds.filter((row) => row.sourceFileId !== rawFileId)
+  };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  if (salesFile) {
+    await deleteWhere("sales_raw_files", (query) => query.eq("id", rawFileId));
+    await deleteWhere("sales_by_salesperson", (query) => query.eq("source_file_id", rawFileId));
+    await deleteWhere("sales_by_platform", (query) => query.eq("source_file_id", rawFileId));
+    await deleteWhere("daily_summary", (query) => query.eq("report_date", salesFile.reportDate));
+  }
+  if (adsFile) {
+    await deleteWhere("ads_raw_files", (query) => query.eq("id", rawFileId));
+    await deleteWhere(adsFile.adsPlatform === "Meta" ? "meta_ads" : "tiktok_ads", (query) => query.eq("source_file_id", rawFileId));
+    await deleteWhere("daily_summary", (query) => query.eq("report_date", adsFile.reportDate));
+  }
+  return next;
+};
+
+const removeDataForDate = (current: AppData, reportDate: string): AppData => ({
+  ...current,
+  salesRawFiles: current.salesRawFiles.filter((file) => file.reportDate !== reportDate),
+  salesBySalesperson: current.salesBySalesperson.filter((row) => row.reportDate !== reportDate),
+  salesByPlatform: current.salesByPlatform.filter((row) => row.reportDate !== reportDate),
+  adsRawFiles: current.adsRawFiles.filter((file) => file.reportDate !== reportDate),
+  metaAds: current.metaAds.filter((row) => row.reportDate !== reportDate),
+  tiktokAds: current.tiktokAds.filter((row) => row.reportDate !== reportDate)
+});
 
 const fromSalesRawFile = (row: any): SalesRawFile => ({
   id: row.id,

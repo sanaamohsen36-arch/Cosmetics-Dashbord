@@ -437,6 +437,195 @@ input[type="file"] {
   display: block;
 }
 
+.ads-file-manager {
+  display: grid;
+  gap: 16px;
+}
+
+.file-manager-toolbar {
+  display: grid;
+  grid-template-columns: minmax(180px, 220px) minmax(220px, 1fr) repeat(3, auto);
+  gap: 10px;
+  align-items: end;
+}
+
+.file-manager-toolbar label {
+  display: grid;
+  gap: 6px;
+  color: #b8c4d4;
+  font-size: 13px;
+}
+
+.upload-status-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.status-pill {
+  border: 1px solid #253246;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  background: #0a1320;
+}
+
+.status-pill strong,
+.status-pill span {
+  display: block;
+}
+
+.status-pill span {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.status-pill.green {
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.status-pill.yellow {
+  border-color: rgba(245, 158, 11, 0.55);
+}
+
+.status-pill.red {
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.ads-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.ads-status-card {
+  border: 1px solid #253246;
+  border-radius: 8px;
+  background: rgba(8, 13, 23, 0.32);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.card-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.card-heading h3,
+.upload-history h3 {
+  margin: 0;
+}
+
+.ads-platform-line {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) auto auto auto auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid #1f2a3b;
+  border-radius: 8px;
+  padding: 10px;
+  background: #0b1422;
+}
+
+.ads-platform-line strong,
+.ads-platform-line span {
+  display: block;
+}
+
+.ads-platform-line span {
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.status-dot {
+  border-radius: 999px;
+  padding: 6px 9px;
+  font-size: 12px;
+  border: 1px solid #253246;
+  white-space: nowrap;
+}
+
+.status-dot.green {
+  color: #86efac;
+  border-color: rgba(34, 197, 94, 0.45);
+}
+
+.status-dot.red {
+  color: #fca5a5;
+  border-color: rgba(248, 113, 113, 0.45);
+}
+
+.compact-upload {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid #253246;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: #111b2b;
+  color: #e5edf5;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.compact-upload input {
+  display: none;
+}
+
+.upload-history {
+  display: grid;
+  gap: 10px;
+}
+
+.compact-table table {
+  min-width: 760px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(2, 6, 23, 0.72);
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.file-modal {
+  width: min(920px, 100%);
+  max-height: 82vh;
+  overflow: auto;
+  border: 1px solid #253246;
+  border-radius: 8px;
+  background: #0d1623;
+  padding: 18px;
+  box-shadow: 0 28px 80px rgba(0, 0, 0, 0.45);
+}
+
+.inline-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.dashboard-file-status {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.dashboard-file-status p,
+.dashboard-file-status small {
+  color: #94a3b8;
+}
+
 .kpi-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(160px, 1fr));
@@ -671,6 +860,10 @@ tr.suspicious td {
 .app-shell.light .sidebar,
 .app-shell.light .panel,
 .app-shell.light .ads-platform-group,
+.app-shell.light .ads-status-card,
+.app-shell.light .ads-platform-line,
+.app-shell.light .status-pill,
+.app-shell.light .file-modal,
 .app-shell.light .kpi-card,
 .app-shell.light .table-wrap,
 .app-shell.light .month-day,
@@ -688,7 +881,8 @@ tr.suspicious td {
 
 .app-shell.light input,
 .app-shell.light select,
-.app-shell.light button {
+.app-shell.light button,
+.app-shell.light .compact-upload {
   background: #ffffff;
   color: #0f172a;
   border-color: #cbd5e1;
@@ -771,9 +965,18 @@ tr.suspicious td {
     grid-template-columns: 1fr;
   }
 
+  .file-manager-toolbar,
+  .ads-status-grid,
+  .ads-platform-line,
+  .dashboard-file-status {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
   .monthly-upload-row,
   .monthly-control-summary,
-  .monthly-preview {
+  .monthly-preview,
+  .upload-status-strip {
     grid-template-columns: 1fr;
   }
 

@@ -35,12 +35,14 @@ import type {
   PageKey,
   SalesByPlatform,
   SalesBySalesperson,
-  SalesRawFile,
-  UploadMode
+  SalesRawFile
 } from "./types";
 import { calculateKpis, dailyTrend, filterAds, filterPeople, filterPlatforms, aggregatePeople, aggregatePlatforms } from "./lib/metrics";
 import {
   createId,
+  deleteAdsForDate,
+  deleteDataForDate,
+  deleteRawFile,
   emptyData,
   getStorageMode,
   loadData,
@@ -183,7 +185,7 @@ export default function App() {
           </div>
         </header>
 
-        {page === "upload" && <UploadPage data={data} commitData={commitData} setRange={setRange} />}
+        {page === "upload" && <UploadPage data={data} commitData={commitData} setRange={setRange} activeDate={range.from} />}
         {page === "dashboard" && (
           <>
             <div className="panel wide">
@@ -198,7 +200,21 @@ export default function App() {
                 }}
               />
             </div>
-            <DashboardPage kpis={kpis} people={scopedPeople} platforms={scopedPlatforms} ads={scopedAds} />
+            <DashboardPage
+              kpis={kpis}
+              people={scopedPeople}
+              platforms={scopedPlatforms}
+              ads={scopedAds}
+              data={data}
+              selectedDate={range.from}
+              onReplaceDate={() => setPage("upload")}
+              onDeleteDate={async (date) => {
+                if (!window.confirm(`Delete all saved data for ${date}?`)) return;
+                const next = await deleteDataForDate(data, date);
+                await commitData(next);
+                setRange({ from: date, to: date });
+              }}
+            />
           </>
         )}
         {page === "salespeople" && (
@@ -255,7 +271,17 @@ function DateControls({ range, setRange }: { range: DateRange; setRange: (range:
   );
 }
 
-function UploadPage({ data, commitData, setRange }: { data: AppData; commitData: CommitData; setRange: (range: DateRange) => void }) {
+function UploadPage({
+  data,
+  commitData,
+  setRange,
+  activeDate
+}: {
+  data: AppData;
+  commitData: CommitData;
+  setRange: (range: DateRange) => void;
+  activeDate: string;
+}) {
   const [uploadUnlocked, setUploadUnlocked] = useState(false);
   const [uploadPassword, setUploadPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("اكتبي باسورد الرفع للمتابعة.");
@@ -266,7 +292,6 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
   const [ocrProgress, setOcrProgress] = useState("");
   const [ocrText, setOcrText] = useState("");
   const [ocrDebugImages, setOcrDebugImages] = useState<string[]>([]);
-  const [salesMode, setSalesMode] = useState<UploadMode>("merge");
 
   const handleSalesFile = (file: File | null) => {
     setSalesFile(file);
@@ -283,8 +308,8 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
   const selectedMonth = salesDate.slice(0, 7);
 
   useEffect(() => {
-    setSalesMode(existingSalesDate ? "replace" : "merge");
-  }, [existingSalesDate, salesDate]);
+    if (activeDate) setSalesDate(activeDate);
+  }, [activeDate]);
 
   const unlockUpload = async () => {
     const response = await fetch("/api/upload-auth", {
@@ -341,6 +366,10 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
   };
 
   const saveSales = async () => {
+    if (existingSalesDate && !window.confirm("Data already exists for this date. Replace old sales data?")) {
+      setOcrProgress("تم إلغاء الحفظ، لم يتم استبدال بيانات اليوم.");
+      return;
+    }
     const normalizedPeople = peoplePreview.map((row) => normalizePerson({ ...row, reportDate: salesDate, sourceFileId }));
     const normalizedPlatforms = platformPreview.map((row) => normalizePlatform({ ...row, reportDate: salesDate, sourceFileId }));
     const hasSalesValues = [...normalizedPeople, ...normalizedPlatforms].some((row) => row.totalOrders > 0 || row.totalRevenue > 0);
@@ -369,7 +398,7 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
       rawFile,
       normalizedPeople,
       normalizedPlatforms,
-      existingSalesDate ? salesMode : "merge"
+      existingSalesDate ? "replace" : "merge"
     );
     setOcrProgress("جاري حفظ تقرير المبيعات على Supabase...");
     await commitData(next);
@@ -438,16 +467,7 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
             تاريخ التقرير
             <input type="date" value={salesDate} onChange={(event) => setSalesDate(event.target.value)} />
           </label>
-          {existingSalesDate && (
-            <label>
-              نفس اليوم مرفوع
-              <select value={salesMode} onChange={(event) => setSalesMode(event.target.value as UploadMode)}>
-                <option value="replace">استبدال صورة اليوم</option>
-                <option value="merge">دمج</option>
-                <option value="cancel">إلغاء</option>
-              </select>
-            </label>
-          )}
+          {existingSalesDate && <Badge text="هذا اليوم محفوظ، الحفظ الجديد سيطلب تأكيد الاستبدال" />}
         </div>
         <div className="actions">
           <button className="primary" disabled={!salesFile} onClick={runOcr}>
@@ -478,21 +498,8 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
         </div>
       )}
 
-      <div className="panel">
-        <div className="section-title">
-          <FileSpreadsheet />
-          <div>
-            <h2>رفع تقارير الإعلانات</h2>
-            <p>CSV/Excel من Meta أو TikTok، مقسم حسب صفحة المبيعات ويقبل أكثر من ملف لنفس اليوم.</p>
-          </div>
-        </div>
-        {adUploadPlatforms.map((salesPlatformName) => (
-          <div className="ads-platform-group" key={salesPlatformName}>
-            <h3>{salesPlatformName}</h3>
-            <AdsUpload platform="Meta" salesPlatformName={salesPlatformName} data={data} commitData={commitData} />
-            <AdsUpload platform="TikTok" salesPlatformName={salesPlatformName} data={data} commitData={commitData} />
-          </div>
-        ))}
+      <div className="panel wide">
+        <AdsFileManager data={data} commitData={commitData} reportDate={salesDate} setReportDate={setSalesDate} />
       </div>
 
       <div className="panel wide">
@@ -567,91 +574,314 @@ function MonthSalesCalendar({
   );
 }
 
-function AdsUpload({
-  platform,
-  salesPlatformName,
+function AdsFileManager({
   data,
-  commitData
+  commitData,
+  reportDate,
+  setReportDate
 }: {
-  platform: AdsPlatform;
-  salesPlatformName: string;
   data: AppData;
   commitData: CommitData;
+  reportDate: string;
+  setReportDate: (date: string) => void;
 }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [reportDate, setReportDate] = useState(today);
-  const [adAccountName, setAdAccountName] = useState("");
-  const [rows, setRows] = useState<AdsRow[]>([]);
   const [message, setMessage] = useState("");
+  const [activeFiles, setActiveFiles] = useState<{ salesPlatformName: string; platform: AdsPlatform } | null>(null);
+  const [adAccountName, setAdAccountName] = useState("غير محدد");
+  const salesFiles = data.salesRawFiles.filter((file) => file.reportDate === reportDate);
+  const dateAdsFiles = data.adsRawFiles.filter((file) => file.reportDate === reportDate);
+  const recentUploads = [...data.salesRawFiles, ...data.adsRawFiles]
+    .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+    .slice(0, 12);
 
-  const existing = data.adsRawFiles.some(
-    (item) =>
-      item.reportDate === reportDate &&
-      item.adsPlatform === platform &&
-      item.salesPlatformName === salesPlatformName &&
-      (item.adAccountName || "غير محدد") === (adAccountName || "غير محدد")
-  );
+  const uploadAdsFile = async (file: File | null, salesPlatformName: string, platform: AdsPlatform) => {
+    if (!file) return;
+    const existing = data.adsRawFiles.some(
+      (item) => item.reportDate === reportDate && item.adsPlatform === platform && item.salesPlatformName === salesPlatformName
+    );
+    if (existing && !window.confirm("Data already exists for this date. Replace old data?")) {
+      setMessage("تم إلغاء الرفع، لم يتم تغيير البيانات.");
+      return;
+    }
 
-  const handleFile = async (selected: File | null) => {
-    setFile(selected);
-    if (!selected) return;
-    const date = inferDateFromFileName(selected.name);
-    setReportDate(date);
     const sourceFileId = createId();
     try {
-      const parsed = await parseAdsWorkbook(selected, platform, salesPlatformName, date, sourceFileId, adAccountName);
-      setRows(parsed);
-      const totals = getAdsTotals(parsed);
-      setMessage(
-        `تمت قراءة ${parsed.length} صف. الصرف ${money(totals.spend)}، الرسائل ${integer(totals.messages)}، التعليقات ${integer(totals.comments)}.`
-      );
+      setMessage(`جاري قراءة ${file.name}...`);
+      const parsed = await parseAdsWorkbook(file, platform, salesPlatformName, reportDate, sourceFileId, adAccountName);
+      const now = new Date().toISOString();
+      const rawFile: AdsRawFile = {
+        id: sourceFileId,
+        fileName: file.name,
+        filePath: file.name,
+        uploadedAt: now,
+        reportDate,
+        adsPlatform: platform,
+        salesPlatformName,
+        adAccountName: adAccountName || "غير محدد",
+        parsingStatus: "success",
+        createdAt: now
+      };
+      const rows = parsed.map((row) => ({
+        ...row,
+        reportDate,
+        salesPlatformName,
+        adAccountName: adAccountName || row.adAccountName || "غير محدد",
+        sourceFileId
+      }));
+      const next = await saveAdsUpload(data, rawFile, rows, platform, existing ? "replace" : "merge");
+      await commitData(next);
+      setMessage(`تم حفظ ${rows.length} صف من ${platform} لصفحة ${salesPlatformName}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر قراءة ملف الإعلانات");
     }
   };
 
-  const save = async () => {
-    const now = new Date().toISOString();
-    const rawFile: AdsRawFile = {
-      id: rows[0]?.sourceFileId ?? createId(),
-      fileName: file?.name ?? `${platform}-manual.xlsx`,
-      filePath: file?.name ?? "manual",
-      uploadedAt: now,
-      reportDate,
-      adsPlatform: platform,
-      salesPlatformName,
-      adAccountName: adAccountName || "غير محدد",
-      parsingStatus: "success",
-      createdAt: now
-    };
-    const datedRows = rows.map((row) => ({ ...row, reportDate, salesPlatformName, adAccountName: adAccountName || row.adAccountName || "غير محدد" }));
-    setMessage(`جاري حفظ بيانات ${platform} لصفحة ${salesPlatformName}...`);
-    const next = await saveAdsUpload(data, rawFile, datedRows, platform, "merge");
+  const deleteDate = async () => {
+    if (!window.confirm(`Delete all data for ${reportDate}?`)) return;
+    const next = await deleteDataForDate(data, reportDate);
     await commitData(next);
-    setMessage(existing ? `تم دمج ملف جديد مع بيانات ${platform} لصفحة ${salesPlatformName}.` : `تم حفظ بيانات ${platform} لصفحة ${salesPlatformName}.`);
+    setMessage("تم حذف بيانات اليوم وتحديث الداشبورد.");
+  };
+
+  const deletePlatformDate = async (platform: AdsPlatform) => {
+    if (!window.confirm(`Delete all ${platform} ads files for ${reportDate}?`)) return;
+    const next = await deleteAdsForDate(data, reportDate, platform);
+    await commitData(next);
+    setMessage(`تم حذف ملفات ${platform} لهذا اليوم.`);
+  };
+
+  const deleteCardFiles = async (salesPlatformName: string, platform: AdsPlatform) => {
+    if (!window.confirm(`Delete ${platform} files for ${salesPlatformName} on ${reportDate}?`)) return;
+    const tableKey = platform === "Meta" ? "metaAds" : "tiktokAds";
+    const next = {
+      ...data,
+      adsRawFiles: data.adsRawFiles.filter(
+        (file) => !(file.reportDate === reportDate && file.adsPlatform === platform && file.salesPlatformName === salesPlatformName)
+      ),
+      [tableKey]: data[tableKey].filter((row) => !(row.reportDate === reportDate && row.salesPlatformName === salesPlatformName))
+    };
+    await commitData(next);
+    setMessage(`تم حذف ملفات ${platform} الخاصة بصفحة ${salesPlatformName}.`);
+  };
+
+  const deleteFile = async (fileId: string) => {
+    if (!window.confirm("Delete this file and its imported rows?")) return;
+    const next = await deleteRawFile(data, fileId);
+    await commitData(next);
+    setMessage("تم حذف الملف والصفوف المرتبطة به.");
   };
 
   return (
-    <div className="ads-upload-card">
-      <div>
-        <strong>{platform === "Meta" ? "Meta Ads" : "TikTok Ads"}</strong>
-        <span>{rows.length ? `${rows.length} صف جاهز لصفحة ${salesPlatformName}` : "اختر الصفحة ثم ملف الإعلانات"}</span>
+    <div className="ads-file-manager">
+      <div className="section-title">
+        <FileSpreadsheet />
+        <div>
+          <h2>إدارة ملفات الإعلانات</h2>
+          <p>اختاري التاريخ أولًا، ثم ارفعي أو استبدلي ملفات Meta و TikTok لكل صفحة من مكان واحد.</p>
+        </div>
       </div>
-      <input placeholder="اسم حساب الإعلانات" value={adAccountName} onChange={(event) => setAdAccountName(event.target.value)} />
-      <input type="file" accept=".xlsx,.xls,.csv" onChange={(event) => handleFile(event.target.files?.[0] ?? null)} />
-      <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
-      <button disabled={!rows.length} onClick={save}>
-        {existing ? "دمج" : "حفظ"}
-      </button>
-      {message && <small>{message}</small>}
+
+      <div className="file-manager-toolbar">
+        <label>
+          تاريخ الملفات
+          <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
+        </label>
+        <label>
+          حساب الإعلانات
+          <input value={adAccountName} onChange={(event) => setAdAccountName(event.target.value)} placeholder="اسم حساب الإعلانات" />
+        </label>
+        <button onClick={deleteDate}>Delete Data by Date</button>
+        <button onClick={() => deletePlatformDate("Meta")}>Delete Meta for Date</button>
+        <button onClick={() => deletePlatformDate("TikTok")}>Delete TikTok for Date</button>
+      </div>
+
+      <div className="upload-status-strip">
+        <StatusPill label="Sales" count={salesFiles.length} tone={salesFiles.length ? "green" : "red"} />
+        <StatusPill label="Meta Ads" count={dateAdsFiles.filter((file) => file.adsPlatform === "Meta").length} tone={dateAdsFiles.some((file) => file.adsPlatform === "Meta") ? "green" : "red"} />
+        <StatusPill label="TikTok Ads" count={dateAdsFiles.filter((file) => file.adsPlatform === "TikTok").length} tone={dateAdsFiles.some((file) => file.adsPlatform === "TikTok") ? "green" : "red"} />
+      </div>
+
+      <div className="ads-status-grid">
+        {adUploadPlatforms.map((salesPlatformName) => (
+          <article className="ads-status-card" key={salesPlatformName}>
+            <div className="card-heading">
+              <h3>{salesPlatformName}</h3>
+              <Badge text={platformUploadTone(data, reportDate, salesPlatformName)} />
+            </div>
+            {(["Meta", "TikTok"] as AdsPlatform[]).map((platform) => {
+              const files = filesForAdsCard(data, reportDate, salesPlatformName, platform);
+              const rowsCount = rowsForAdsCard(data, reportDate, salesPlatformName, platform).length;
+              return (
+                <div className="ads-platform-line" key={platform}>
+                  <div>
+                    <strong>{platform} Ads</strong>
+                    <span>{files.length ? `Uploaded (${files.length} files, ${rowsCount} rows)` : "No Files"}</span>
+                  </div>
+                  <StatusDot uploaded={files.length > 0} />
+                  <label className="compact-upload">
+                    Upload
+                    <input type="file" accept=".xlsx,.xls,.csv" onChange={(event) => uploadAdsFile(event.target.files?.[0] ?? null, salesPlatformName, platform)} />
+                  </label>
+                  <button disabled={!files.length} onClick={() => setActiveFiles({ salesPlatformName, platform })}>View Files</button>
+                  <button disabled={!files.length} onClick={() => deleteCardFiles(salesPlatformName, platform)}>Delete</button>
+                </div>
+              );
+            })}
+          </article>
+        ))}
+      </div>
+
+      <div className="upload-history">
+        <h3>Recent Uploads</h3>
+        <div className="table-wrap compact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Brand</th>
+                <th>Platform</th>
+                <th>File Name</th>
+                <th>Imported Rows</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {recentUploads.map((file) => (
+                <tr key={file.id}>
+                  <td>{file.reportDate}</td>
+                  <td>{"salesPlatformName" in file ? file.salesPlatformName : "Sales"}</td>
+                  <td>{"adsPlatform" in file ? file.adsPlatform : "Sales"}</td>
+                  <td>{file.fileName}</td>
+                  <td>{rowCountForFile(data, file.id)}</td>
+                  <td><Badge text={"parsingStatus" in file ? file.parsingStatus : file.ocrStatus} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {activeFiles && (
+        <FileListModal
+          data={data}
+          reportDate={reportDate}
+          salesPlatformName={activeFiles.salesPlatformName}
+          platform={activeFiles.platform}
+          onClose={() => setActiveFiles(null)}
+          onDelete={deleteFile}
+          onReplace={(file) => uploadAdsFile(file, activeFiles.salesPlatformName, activeFiles.platform)}
+        />
+      )}
+
+      {message && <p className="status-line">{message}</p>}
     </div>
   );
 }
 
-function DashboardPage({ kpis, people, platforms, ads }: { kpis: ReturnType<typeof calculateKpis>; people: SalesBySalesperson[]; platforms: SalesByPlatform[]; ads: AdsRow[] }) {
+function StatusPill({ label, count, tone }: { label: string; count: number; tone: "green" | "yellow" | "red" }) {
+  return (
+    <div className={`status-pill ${tone}`}>
+      <strong>{label}</strong>
+      <span>{count ? `${count} files` : "Missing Data"}</span>
+    </div>
+  );
+}
+
+function StatusDot({ uploaded }: { uploaded: boolean }) {
+  return <span className={`status-dot ${uploaded ? "green" : "red"}`}>{uploaded ? "Uploaded" : "No Files"}</span>;
+}
+
+function FileListModal({
+  data,
+  reportDate,
+  salesPlatformName,
+  platform,
+  onClose,
+  onDelete,
+  onReplace
+}: {
+  data: AppData;
+  reportDate: string;
+  salesPlatformName: string;
+  platform: AdsPlatform;
+  onClose: () => void;
+  onDelete: (fileId: string) => void;
+  onReplace: (file: File | null) => void;
+}) {
+  const files = filesForAdsCard(data, reportDate, salesPlatformName, platform);
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="file-modal">
+        <div className="table-header">
+          <h2>{salesPlatformName} - {platform} Ads</h2>
+          <button onClick={onClose}>إغلاق</button>
+        </div>
+        <div className="table-wrap compact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>File Name</th>
+                <th>Upload Time</th>
+                <th>Rows Imported</th>
+                <th>Status</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {files.map((file) => (
+                <tr key={file.id}>
+                  <td>{file.fileName}</td>
+                  <td>{new Date(file.uploadedAt).toLocaleString("ar-EG")}</td>
+                  <td>{rowCountForFile(data, file.id)}</td>
+                  <td><Badge text={file.parsingStatus} /></td>
+                  <td>
+                    <div className="inline-actions">
+                      <button onClick={() => onDelete(file.id)}>Delete</button>
+                      <label className="compact-upload">
+                        Replace
+                        <input type="file" accept=".xlsx,.xls,.csv" onChange={(event) => onReplace(event.target.files?.[0] ?? null)} />
+                      </label>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {!files.length && (
+                <tr>
+                  <td colSpan={5}>No files uploaded for this date.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardPage({
+  kpis,
+  people,
+  platforms,
+  ads,
+  data,
+  selectedDate,
+  onReplaceDate,
+  onDeleteDate
+}: {
+  kpis: ReturnType<typeof calculateKpis>;
+  people: SalesBySalesperson[];
+  platforms: SalesByPlatform[];
+  ads: AdsRow[];
+  data: AppData;
+  selectedDate: string;
+  onReplaceDate: () => void;
+  onDeleteDate: (date: string) => void;
+}) {
   const trend = dailyTrend(people, ads);
   const byPeople = aggregatePeople(people).slice(0, 8);
   const byPlatform = aggregatePlatforms(platforms).slice(0, 8);
+  const selectedFiles = [...data.salesRawFiles, ...data.adsRawFiles].filter((file) => file.reportDate === selectedDate);
+  const lastUpload = selectedFiles.sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))[0];
   const shiftData = [
     { name: "صباحي", orders: kpis.morningOrders, revenue: kpis.morningRevenue },
     { name: "مسائي", orders: kpis.eveningOrders, revenue: kpis.eveningRevenue }
@@ -659,6 +889,17 @@ function DashboardPage({ kpis, people, platforms, ads }: { kpis: ReturnType<type
 
   return (
     <section className="dashboard-stack">
+      <div className="panel dashboard-file-status">
+        <div>
+          <h2>حالة ملفات {selectedDate}</h2>
+          <p>Sales: {data.salesRawFiles.filter((file) => file.reportDate === selectedDate).length} file(s) · Meta: {data.adsRawFiles.filter((file) => file.reportDate === selectedDate && file.adsPlatform === "Meta").length} file(s) · TikTok: {data.adsRawFiles.filter((file) => file.reportDate === selectedDate && file.adsPlatform === "TikTok").length} file(s)</p>
+          <small>Last upload: {lastUpload ? new Date(lastUpload.uploadedAt).toLocaleString("ar-EG") : "No uploads"}</small>
+        </div>
+        <div className="actions">
+          <button onClick={onReplaceDate}>Replace Data for Date</button>
+          <button onClick={() => onDeleteDate(selectedDate)}>Delete Data by Date</button>
+        </div>
+      </div>
       <div className="kpi-grid">
         <Kpi title="إجمالي المبيعات" value={money(kpis.totalSalesRevenue)} />
         <Kpi title="إجمالي الطلبات" value={integer(kpis.totalOrders)} />
@@ -1369,6 +1610,30 @@ const getSalesDaySummary = (data: AppData, date: string) => {
     orders: rows.reduce((total, row) => total + row.totalOrders, 0),
     revenue: rows.reduce((total, row) => total + row.totalRevenue, 0)
   };
+};
+
+const filesForAdsCard = (data: AppData, reportDate: string, salesPlatformName: string, platform: AdsPlatform) =>
+  data.adsRawFiles.filter(
+    (file) => file.reportDate === reportDate && file.salesPlatformName === salesPlatformName && file.adsPlatform === platform
+  );
+
+const rowsForAdsCard = (data: AppData, reportDate: string, salesPlatformName: string, platform: AdsPlatform) => {
+  const rows = platform === "Meta" ? data.metaAds : data.tiktokAds;
+  return rows.filter((row) => row.reportDate === reportDate && row.salesPlatformName === salesPlatformName);
+};
+
+const rowCountForFile = (data: AppData, sourceFileId: string) =>
+  data.salesBySalesperson.filter((row) => row.sourceFileId === sourceFileId).length +
+  data.salesByPlatform.filter((row) => row.sourceFileId === sourceFileId).length +
+  data.metaAds.filter((row) => row.sourceFileId === sourceFileId).length +
+  data.tiktokAds.filter((row) => row.sourceFileId === sourceFileId).length;
+
+const platformUploadTone = (data: AppData, reportDate: string, salesPlatformName: string) => {
+  const meta = filesForAdsCard(data, reportDate, salesPlatformName, "Meta").length;
+  const tiktok = filesForAdsCard(data, reportDate, salesPlatformName, "TikTok").length;
+  if (meta && tiktok) return "مكتمل";
+  if (meta || tiktok) return "جزئي";
+  return "ناقص";
 };
 
 const numericField = (field: string) => /Orders|Revenue|spend|impressions|reach|clicks|ctr|cpc|cpm|leads|purchases|Value/.test(field);
