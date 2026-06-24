@@ -44,7 +44,7 @@ import type {
   SalesBySalesperson,
   SalesRawFile
 } from "./types";
-import { calculateKpis, dailyTrend, filterAds, filterPeople, filterPlatforms, aggregatePeople, aggregatePlatforms } from "./lib/metrics";
+import { calculateKpis, dailyTrend, filterAds, filterPeople, filterPlatforms, aggregatePeople, aggregatePlatforms, isSubtotalPlatformName } from "./lib/metrics";
 import {
   createId,
   deleteAdsForDate,
@@ -459,8 +459,16 @@ function UploadPage({
       setSalesPreviewVisible(true);
       return;
     }
-    const normalizedPeople = peoplePreview.map((row) => normalizePerson({ ...row, reportDate: salesDate, sourceFileId }));
-    const normalizedPlatforms = platformPreview.map((row) => normalizePlatform({ ...row, reportDate: salesDate, sourceFileId }));
+    const reconciliation = getSalesPreviewReconciliation(peoplePreview, platformPreview);
+    if (!reconciliation.canSave) {
+      setOcrProgress("Parsed totals do not match report totals. راجعي Debug Totals وصححي الصفوف قبل الحفظ.");
+      setSalesPreviewVisible(true);
+      return;
+    }
+    const detailPeoplePreview = peoplePreview.filter((row) => !isSalespersonSummaryRow(row));
+    const detailPlatformPreview = platformPreview.filter((row) => !isPlatformSummaryRow(row));
+    const normalizedPeople = detailPeoplePreview.map((row) => normalizePerson({ ...row, reportDate: salesDate, sourceFileId }));
+    const normalizedPlatforms = detailPlatformPreview.map((row) => normalizePlatform({ ...row, reportDate: salesDate, sourceFileId }));
     const hasSalesValues = [...normalizedPeople, ...normalizedPlatforms].some((row) => row.totalOrders > 0 || row.totalRevenue > 0);
     if (!hasSalesValues) {
       setOcrProgress("لا يمكن حفظ تقرير فاضي. راجعي المعاينة أو اكتبي أرقام اليوم أولًا.");
@@ -1637,6 +1645,7 @@ function ManualSalesReviewTable({
 }) {
   const salespersonSuggestions = getSalespersonSuggestions(data, peopleRows);
   const platformSuggestions = getPlatformSuggestions(data, platformRows);
+  const reconciliation = getSalesPreviewReconciliation(peopleRows, platformRows);
 
   const updatePerson = (id: string, field: keyof SalesBySalesperson, value: string) => {
     setPeopleRows(
@@ -1690,6 +1699,7 @@ function ManualSalesReviewTable({
           <button onClick={() => setPlatformRows([...platformRows, blankPlatform(reportDate, sourceFileId)])}>Add Missing Page Row</button>
         </div>
       </div>
+      <SalesReconciliationPanel reconciliation={reconciliation} peopleRows={peopleRows} platformRows={platformRows} />
       <datalist id="salesperson-suggestions">
         {salespersonSuggestions.map((name) => <option value={name} key={name} />)}
       </datalist>
@@ -1940,6 +1950,107 @@ function Badge({ text }: { text: string }) {
   return <span className="badge">{text}</span>;
 }
 
+interface SalesPreviewReconciliation {
+  parsedOrders: number;
+  parsedValue: number;
+  expectedOrders: number | null;
+  expectedValue: number | null;
+  ordersDifference: number | null;
+  valueDifference: number | null;
+  salespeopleOrders: number;
+  salespeopleValue: number;
+  pagesOrders: number;
+  pagesValue: number;
+  canSave: boolean;
+  warnings: string[];
+}
+
+function SalesReconciliationPanel({
+  reconciliation,
+  peopleRows,
+  platformRows
+}: {
+  reconciliation: SalesPreviewReconciliation;
+  peopleRows: SalesBySalesperson[];
+  platformRows: SalesByPlatform[];
+}) {
+  return (
+    <div className={`reconciliation-panel ${reconciliation.canSave ? "ok" : "error"}`}>
+      <div className="reconciliation-header">
+        <div>
+          <h3>{reconciliation.canSave ? "Reconciliation passed" : "Parsed totals do not match report totals."}</h3>
+          <p>لا يتم حفظ البيانات النهائية إلا لو مجموع السيلز ومجموع الصفحات يساوي إجمالي التقرير.</p>
+        </div>
+        <Badge text={reconciliation.canSave ? "Ready to save" : "Blocked"} />
+      </div>
+      <div className="reconciliation-grid">
+        <Kpi compact title="Parsed Orders" value={integer(reconciliation.parsedOrders)} />
+        <Kpi compact title="Parsed Value" value={money(reconciliation.parsedValue)} />
+        <Kpi compact title="Expected Orders" value={reconciliation.expectedOrders === null ? "N/A" : integer(reconciliation.expectedOrders)} />
+        <Kpi compact title="Expected Value" value={reconciliation.expectedValue === null ? "N/A" : money(reconciliation.expectedValue)} />
+        <Kpi compact title="Orders Difference" value={reconciliation.ordersDifference === null ? "N/A" : integer(reconciliation.ordersDifference)} />
+        <Kpi compact title="Value Difference" value={reconciliation.valueDifference === null ? "N/A" : money(reconciliation.valueDifference)} />
+      </div>
+      <div className="reconciliation-checks">
+        <span>Salespeople Total Orders: <strong>{integer(reconciliation.salespeopleOrders)}</strong></span>
+        <span>Pages Total Orders: <strong>{integer(reconciliation.pagesOrders)}</strong></span>
+        <span>Salespeople Total Value: <strong>{money(reconciliation.salespeopleValue)}</strong></span>
+        <span>Pages Total Value: <strong>{money(reconciliation.pagesValue)}</strong></span>
+      </div>
+      {reconciliation.warnings.length > 0 && (
+        <ul className="reconciliation-warnings">
+          {reconciliation.warnings.map((warning) => <li key={warning}>{warning}</li>)}
+        </ul>
+      )}
+      <details className="debug-section" open={!reconciliation.canSave}>
+        <summary>Debug parsed rows</summary>
+        <div className="debug-grid">
+          <DebugSalesRows title="Parsed salesperson rows" rows={peopleRows} nameKey="salespersonName" />
+          <DebugSalesRows title="Parsed page rows" rows={platformRows} nameKey="platformName" />
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function DebugSalesRows({
+  title,
+  rows,
+  nameKey
+}: {
+  title: string;
+  rows: Array<SalesBySalesperson | SalesByPlatform>;
+  nameKey: "salespersonName" | "platformName";
+}) {
+  return (
+    <div className="debug-table-wrap">
+      <h4>{title}</h4>
+      <table className="debug-table">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Morning</th>
+            <th>Evening</th>
+            <th>Total</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.id} className={hasSalesTotalMismatch(row) || isMissingSalesRow(row) ? "review-needs" : ""}>
+              <td>{String(row[nameKey as keyof typeof row] ?? "") || "Missing row/name"}</td>
+              <td>{integer(row.morningOrders)} / {money(row.morningRevenue)}</td>
+              <td>{integer(row.eveningOrders)} / {money(row.eveningRevenue)}</td>
+              <td>{integer(row.totalOrders)}</td>
+              <td>{money(row.totalRevenue)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 const salesExcelStatusLabel = (status: "idle" | "uploaded" | "previewed" | "saved") => {
   if (status === "saved") return "Saved";
   if (status === "previewed") return "Previewed";
@@ -1951,7 +2062,7 @@ const cloneSalesRows = <T extends SalesBySalesperson | SalesByPlatform>(rows: T[
   rows.map((row) => ({ ...row, ocrFieldWarnings: { ...(row.ocrFieldWarnings ?? {}) } }));
 
 const reviewRowClass = (row: SalesBySalesperson | SalesByPlatform) => {
-  if (hasSalesTotalMismatch(row) || row.ocrReviewStatus === "needs_review" || (row.ocrConfidence ?? 100) < 70) return "review-needs";
+  if (hasSalesTotalMismatch(row) || isMissingSalesRow(row) || row.ocrReviewStatus === "needs_review" || (row.ocrConfidence ?? 100) < 70) return "review-needs";
   if (row.ocrReviewStatus === "auto_corrected") return "review-auto";
   return "";
 };
@@ -1959,6 +2070,81 @@ const reviewRowClass = (row: SalesBySalesperson | SalesByPlatform) => {
 const hasSalesTotalMismatch = (row: SalesBySalesperson | SalesByPlatform) =>
   row.totalOrders !== row.morningOrders + row.eveningOrders ||
   row.totalRevenue !== row.morningRevenue + row.eveningRevenue;
+
+const isSalespersonSummaryRow = (row: SalesBySalesperson) =>
+  /اجمالي|إجمالي|total/i.test(row.salespersonName) && !row.salespersonCode.trim();
+
+const isGrandTotalPlatformName = (name: string) => {
+  const normalized = normalizeOcrLookupText(name);
+  return normalized === "اجمالي اليوم" || normalized === "total day" || normalized === "daily total";
+};
+
+const isPlatformSummaryRow = (row: SalesByPlatform) =>
+  isSubtotalPlatformName(row.platformName) || isGrandTotalPlatformName(row.platformName);
+
+const isMissingSalesRow = (row: SalesBySalesperson | SalesByPlatform) => {
+  if ("salespersonName" in row) return !isSalespersonSummaryRow(row) && (!row.salespersonName.trim() || !row.salespersonCode.trim());
+  return !isPlatformSummaryRow(row) && !row.platformName.trim();
+};
+
+const sumSalesRows = <T extends SalesBySalesperson | SalesByPlatform>(rows: T[]) => ({
+  orders: rows.reduce((total, row) => total + row.totalOrders, 0),
+  value: rows.reduce((total, row) => total + row.totalRevenue, 0)
+});
+
+const getSalesPreviewReconciliation = (
+  peopleRows: SalesBySalesperson[],
+  platformRows: SalesByPlatform[]
+): SalesPreviewReconciliation => {
+  const detailPeople = peopleRows.filter((row) => !isSalespersonSummaryRow(row));
+  const detailPlatforms = platformRows.filter((row) => !isPlatformSummaryRow(row));
+  const peopleTotals = sumSalesRows(detailPeople);
+  const platformTotals = sumSalesRows(detailPlatforms);
+  const platformGrandTotal = platformRows.find((row) => isGrandTotalPlatformName(row.platformName));
+  const salespersonGrandTotal = peopleRows.find(isSalespersonSummaryRow);
+  const expectedOrders = platformGrandTotal?.totalOrders ?? salespersonGrandTotal?.totalOrders ?? null;
+  const expectedValue = platformGrandTotal?.totalRevenue ?? salespersonGrandTotal?.totalRevenue ?? null;
+  const warnings: string[] = [];
+
+  if (expectedOrders === null || expectedValue === null) {
+    warnings.push("Expected report grand total was not found in the uploaded file.");
+  }
+  if (peopleTotals.orders !== platformTotals.orders || peopleTotals.value !== platformTotals.value) {
+    warnings.push("Salespeople totals do not match page totals.");
+  }
+  if (expectedOrders !== null && peopleTotals.orders !== expectedOrders) {
+    warnings.push("Salespeople Total Orders does not equal report grand total.");
+  }
+  if (expectedValue !== null && peopleTotals.value !== expectedValue) {
+    warnings.push("Salespeople Total Value does not equal report grand total.");
+  }
+  if (expectedOrders !== null && platformTotals.orders !== expectedOrders) {
+    warnings.push("Pages Total Orders does not equal report grand total.");
+  }
+  if (expectedValue !== null && platformTotals.value !== expectedValue) {
+    warnings.push("Pages Total Value does not equal report grand total.");
+  }
+  if (platformGrandTotal && salespersonGrandTotal) {
+    if (platformGrandTotal.totalOrders !== salespersonGrandTotal.totalOrders || platformGrandTotal.totalRevenue !== salespersonGrandTotal.totalRevenue) {
+      warnings.push("Page grand total and salesperson grand total are different.");
+    }
+  }
+
+  return {
+    parsedOrders: peopleTotals.orders,
+    parsedValue: peopleTotals.value,
+    expectedOrders,
+    expectedValue,
+    ordersDifference: expectedOrders === null ? null : expectedOrders - peopleTotals.orders,
+    valueDifference: expectedValue === null ? null : expectedValue - peopleTotals.value,
+    salespeopleOrders: peopleTotals.orders,
+    salespeopleValue: peopleTotals.value,
+    pagesOrders: platformTotals.orders,
+    pagesValue: platformTotals.value,
+    canSave: warnings.length === 0,
+    warnings
+  };
+};
 
 const applyPreviewValidation = <T extends SalesBySalesperson | SalesByPlatform>(row: T): T => {
   const warnings = { ...(row.ocrFieldWarnings ?? {}) };

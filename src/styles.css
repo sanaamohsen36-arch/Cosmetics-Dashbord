@@ -1709,6 +1709,97 @@ tbody tr:hover td {
   gap: 14px;
 }
 
+.reconciliation-panel {
+  border: 1px solid #dbe5f1;
+  border-radius: 14px;
+  padding: 14px;
+  background: #f8fafc;
+  display: grid;
+  gap: 12px;
+}
+
+.reconciliation-panel.error {
+  border-color: #fecaca;
+  background: #fff7ed;
+}
+
+.reconciliation-panel.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.reconciliation-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reconciliation-header h3 {
+  margin: 0 0 4px;
+}
+
+.reconciliation-header p {
+  margin: 0;
+  color: #64748b;
+}
+
+.reconciliation-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(130px, 1fr));
+  gap: 10px;
+}
+
+.reconciliation-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.reconciliation-checks span {
+  border: 1px solid #dbe5f1;
+  border-radius: 999px;
+  background: #ffffff;
+  padding: 8px 12px;
+  color: #475569;
+}
+
+.reconciliation-warnings {
+  margin: 0;
+  padding-inline-start: 22px;
+  color: #b91c1c;
+}
+
+.debug-section {
+  border-top: 1px solid #e2e8f0;
+  padding-top: 10px;
+}
+
+.debug-section summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.debug-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.debug-table-wrap {
+  overflow: auto;
+}
+
+.debug-table {
+  min-width: 640px;
+}
+
+.debug-table h4,
+.debug-table-wrap h4 {
+  margin: 0 0 8px;
+}
+
 .review-subtitle {
   margin: 6px 0 0;
   color: #64748b;
@@ -1742,6 +1833,35 @@ tr.review-auto td {
 .app-shell.dark .review-subtitle,
 .app-shell.dark .muted-cell {
   color: #94a3b8;
+}
+
+.app-shell.dark .reconciliation-panel {
+  background: #0a1320;
+  border-color: #263241;
+}
+
+.app-shell.dark .reconciliation-panel.error {
+  background: rgba(127, 29, 29, 0.16);
+  border-color: #7f1d1d;
+}
+
+.app-shell.dark .reconciliation-panel.ok {
+  background: rgba(20, 83, 45, 0.16);
+  border-color: #14532d;
+}
+
+.app-shell.dark .reconciliation-header p {
+  color: #94a3b8;
+}
+
+.app-shell.dark .reconciliation-checks span {
+  background: #111827;
+  border-color: #263241;
+  color: #dbeafe;
+}
+
+.app-shell.dark .debug-section {
+  border-top-color: #263241;
 }
 
 .app-shell.dark .file-status-card {
