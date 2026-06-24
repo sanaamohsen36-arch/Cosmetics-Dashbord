@@ -104,6 +104,37 @@ create table if not exists public.platform_settings (
   created_at timestamptz not null default now()
 );
 
+create table if not exists public.ocr_page_corrections (
+  id text primary key,
+  wrong_value text not null,
+  correct_value text not null,
+  created_at timestamptz not null default now(),
+  usage_count integer not null default 0
+);
+
+create table if not exists public.ocr_salesperson_corrections (
+  id text primary key,
+  wrong_value text not null,
+  correct_value text not null,
+  salesperson_code text not null default '',
+  created_at timestamptz not null default now(),
+  usage_count integer not null default 0
+);
+
+create table if not exists public.salespeople (
+  id text primary key,
+  code text not null unique,
+  name text not null,
+  active boolean not null default true
+);
+
+create table if not exists public.platforms (
+  id text primary key,
+  name text not null unique,
+  aliases text[] not null default '{}',
+  active boolean not null default true
+);
+
 create table if not exists public.daily_summary (
   id text primary key,
   report_date date not null unique,
@@ -129,6 +160,9 @@ alter table public.tiktok_ads add column if not exists ad_account_name text not 
 alter table public.tiktok_ads add column if not exists messages_count integer not null default 0;
 alter table public.tiktok_ads add column if not exists comments_count integer not null default 0;
 
+create index if not exists idx_ocr_page_corrections_wrong_value on public.ocr_page_corrections (wrong_value);
+create index if not exists idx_ocr_salesperson_corrections_wrong_code on public.ocr_salesperson_corrections (wrong_value, salesperson_code);
+
 alter table public.sales_raw_files enable row level security;
 alter table public.sales_by_salesperson enable row level security;
 alter table public.sales_by_platform enable row level security;
@@ -137,6 +171,10 @@ alter table public.meta_ads enable row level security;
 alter table public.tiktok_ads enable row level security;
 alter table public.platform_settings enable row level security;
 alter table public.daily_summary enable row level security;
+alter table public.ocr_page_corrections enable row level security;
+alter table public.ocr_salesperson_corrections enable row level security;
+alter table public.salespeople enable row level security;
+alter table public.platforms enable row level security;
 
 drop policy if exists "public_select_sales_raw_files" on public.sales_raw_files;
 drop policy if exists "public_write_sales_raw_files" on public.sales_raw_files;
@@ -178,6 +216,26 @@ drop policy if exists "public_write_daily_summary" on public.daily_summary;
 create policy "public_select_daily_summary" on public.daily_summary for select using (true);
 create policy "public_write_daily_summary" on public.daily_summary for all using (true) with check (true);
 
+drop policy if exists "public_select_ocr_page_corrections" on public.ocr_page_corrections;
+drop policy if exists "public_write_ocr_page_corrections" on public.ocr_page_corrections;
+create policy "public_select_ocr_page_corrections" on public.ocr_page_corrections for select using (true);
+create policy "public_write_ocr_page_corrections" on public.ocr_page_corrections for all using (true) with check (true);
+
+drop policy if exists "public_select_ocr_salesperson_corrections" on public.ocr_salesperson_corrections;
+drop policy if exists "public_write_ocr_salesperson_corrections" on public.ocr_salesperson_corrections;
+create policy "public_select_ocr_salesperson_corrections" on public.ocr_salesperson_corrections for select using (true);
+create policy "public_write_ocr_salesperson_corrections" on public.ocr_salesperson_corrections for all using (true) with check (true);
+
+drop policy if exists "public_select_salespeople" on public.salespeople;
+drop policy if exists "public_write_salespeople" on public.salespeople;
+create policy "public_select_salespeople" on public.salespeople for select using (true);
+create policy "public_write_salespeople" on public.salespeople for all using (true) with check (true);
+
+drop policy if exists "public_select_platforms" on public.platforms;
+drop policy if exists "public_write_platforms" on public.platforms;
+create policy "public_select_platforms" on public.platforms for select using (true);
+create policy "public_write_platforms" on public.platforms for all using (true) with check (true);
+
 do $$
 begin
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'sales_raw_files') then
@@ -200,5 +258,17 @@ begin
   end if;
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'platform_settings') then
     alter publication supabase_realtime add table public.platform_settings;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'ocr_page_corrections') then
+    alter publication supabase_realtime add table public.ocr_page_corrections;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'ocr_salesperson_corrections') then
+    alter publication supabase_realtime add table public.ocr_salesperson_corrections;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'salespeople') then
+    alter publication supabase_realtime add table public.salespeople;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'platforms') then
+    alter publication supabase_realtime add table public.platforms;
   end if;
 end $$;

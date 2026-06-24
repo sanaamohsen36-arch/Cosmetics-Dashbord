@@ -36,7 +36,10 @@ import type {
   AdsRow,
   AppData,
   DateRange,
+  OcrPageCorrection,
+  OcrSalespersonCorrection,
   PageKey,
+  PlatformMaster,
   SalesByPlatform,
   SalesBySalesperson,
   SalesRawFile
@@ -305,6 +308,8 @@ function UploadPage({
   const [salesDate, setSalesDate] = useState(today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
   const [platformPreview, setPlatformPreview] = useState<SalesByPlatform[]>([]);
+  const [originalPeoplePreview, setOriginalPeoplePreview] = useState<SalesBySalesperson[]>([]);
+  const [originalPlatformPreview, setOriginalPlatformPreview] = useState<SalesByPlatform[]>([]);
   const [ocrProgress, setOcrProgress] = useState("");
   const [ocrText, setOcrText] = useState("");
   const [ocrDebugImages, setOcrDebugImages] = useState<string[]>([]);
@@ -313,6 +318,8 @@ function UploadPage({
     setSalesFile(file);
     setPeoplePreview([]);
     setPlatformPreview([]);
+    setOriginalPeoplePreview([]);
+    setOriginalPlatformPreview([]);
     setOcrText("");
     setOcrDebugImages([]);
     setOcrProgress("");
@@ -359,8 +366,11 @@ function UploadPage({
       const template = createManualSalesTemplate();
       const people = parsed.people.length ? parsed.people : template.people;
       const platforms = parsed.platforms.length ? parsed.platforms : template.platforms;
-      setPeoplePreview(people);
-      setPlatformPreview(platforms);
+      setOriginalPeoplePreview(cloneSalesRows(people));
+      setOriginalPlatformPreview(cloneSalesRows(platforms));
+      const corrected = applyOcrCorrections(data, people, platforms);
+      setPeoplePreview(corrected.people);
+      setPlatformPreview(corrected.platforms);
       setOcrDebugImages(getLatestSalesOcrDebugImages());
       setOcrProgress(
         parsed.people.length || parsed.platforms.length
@@ -375,8 +385,13 @@ function UploadPage({
   const loadSample = () => {
     const sample = createSampleSales(salesDate, sourceFileId);
     const template = createManualSalesTemplate();
-    setPeoplePreview(sample.people.length ? sample.people : template.people);
-    setPlatformPreview(sample.platforms.length ? sample.platforms : template.platforms);
+    const people = sample.people.length ? sample.people : template.people;
+    const platforms = sample.platforms.length ? sample.platforms : template.platforms;
+    setOriginalPeoplePreview(cloneSalesRows(people));
+    setOriginalPlatformPreview(cloneSalesRows(platforms));
+    const corrected = applyOcrCorrections(data, people, platforms);
+    setPeoplePreview(corrected.people);
+    setPlatformPreview(corrected.platforms);
     setOcrDebugImages([]);
     setOcrProgress(sample.people.length || sample.platforms.length ? "تم تحميل نموذج قابل للتعديل من شكل التقرير المرفق." : "تم تحميل قالب يدوي لليوم المختار.");
   };
@@ -394,8 +409,9 @@ function UploadPage({
       return;
     }
     const blockingWarnings = [...normalizedPeople, ...normalizedPlatforms].flatMap((row) => severeOcrWarnings(row));
-    if (blockingWarnings.length) {
-      setOcrProgress("فيه خلايا OCR محتاجة مراجعة يدوية قبل الحفظ: " + blockingWarnings.slice(0, 3).join("، "));
+    const reviewRows = [...normalizedPeople, ...normalizedPlatforms].filter((row) => row.ocrReviewStatus === "needs_review");
+    if ((blockingWarnings.length || reviewRows.length) && !window.confirm("فيه صفوف محتاجة مراجعة. هل أكدتي إن البيانات صحيحة وتكملي الحفظ؟")) {
+      setOcrProgress("راجعي الصفوف المظللة أو صححيها قبل الحفظ النهائي.");
       return;
     }
 
@@ -409,8 +425,9 @@ function UploadPage({
       ocrStatus: ocrText ? "success" : "manual",
       createdAt: now
     };
+    const learnedData = buildOcrLearningData(data, originalPeoplePreview, normalizedPeople, originalPlatformPreview, normalizedPlatforms);
     const next = await saveSalesUpload(
-      data,
+      learnedData,
       rawFile,
       normalizedPeople,
       normalizedPlatforms,
@@ -420,6 +437,14 @@ function UploadPage({
     await commitData(next);
     setRange({ from: salesDate, to: salesDate });
     setOcrProgress("تم حفظ تقرير المبيعات وتحديث اللوحة.");
+  };
+
+  const saveCorrectionsOnly = async () => {
+    const normalizedPeople = peoplePreview.map((row) => normalizePerson({ ...row, reportDate: salesDate, sourceFileId }));
+    const normalizedPlatforms = platformPreview.map((row) => normalizePlatform({ ...row, reportDate: salesDate, sourceFileId }));
+    const learnedData = buildOcrLearningData(data, originalPeoplePreview, normalizedPeople, originalPlatformPreview, normalizedPlatforms);
+    await commitData(learnedData);
+    setOcrProgress("تم حفظ التصحيحات فقط. الرفعات القادمة هتستخدم نفس التصحيحات تلقائيًا.");
   };
 
   const selectSalesDay = (date: string) => {
@@ -490,8 +515,11 @@ function UploadPage({
             <Search size={18} /> تشغيل OCR
           </button>
           <button onClick={loadSample}>تحميل نموذج</button>
+          <button disabled={!peoplePreview.length && !platformPreview.length} onClick={saveCorrectionsOnly}>
+            Save Corrections Only
+          </button>
           <button className="success" disabled={!peoplePreview.length && !platformPreview.length} onClick={saveSales}>
-            <Save size={18} /> حفظ المبيعات
+            <Save size={18} /> Save Final Data
           </button>
         </div>
         {ocrProgress && <p className="status-line">{ocrProgress}</p>}
@@ -519,13 +547,17 @@ function UploadPage({
       </div>
 
       <div className="panel wide">
-        <PreviewToolbar title="معاينة السيلز" onAdd={() => setPeoplePreview([...peoplePreview, blankPerson(salesDate, sourceFileId)])} />
-        <EditablePeopleTable rows={peoplePreview} setRows={setPeoplePreview} />
-      </div>
-
-      <div className="panel wide">
-        <PreviewToolbar title="معاينة الصفحات" onAdd={() => setPlatformPreview([...platformPreview, blankPlatform(salesDate, sourceFileId)])} />
-        <EditablePlatformTable rows={platformPreview} setRows={setPlatformPreview} />
+        <ManualSalesReviewTable
+          data={data}
+          reportDate={salesDate}
+          sourceFileId={sourceFileId}
+          peopleRows={peoplePreview}
+          platformRows={platformPreview}
+          originalPeopleRows={originalPeoplePreview}
+          originalPlatformRows={originalPlatformPreview}
+          setPeopleRows={setPeoplePreview}
+          setPlatformRows={setPlatformPreview}
+        />
       </div>
     </section>
   );
@@ -1435,6 +1467,158 @@ function PreviewToolbar({ title, onAdd }: { title: string; onAdd: () => void }) 
   );
 }
 
+function ManualSalesReviewTable({
+  data,
+  reportDate,
+  sourceFileId,
+  peopleRows,
+  platformRows,
+  originalPeopleRows,
+  originalPlatformRows,
+  setPeopleRows,
+  setPlatformRows
+}: {
+  data: AppData;
+  reportDate: string;
+  sourceFileId: string;
+  peopleRows: SalesBySalesperson[];
+  platformRows: SalesByPlatform[];
+  originalPeopleRows: SalesBySalesperson[];
+  originalPlatformRows: SalesByPlatform[];
+  setPeopleRows: (rows: SalesBySalesperson[]) => void;
+  setPlatformRows: (rows: SalesByPlatform[]) => void;
+}) {
+  const salespersonSuggestions = getSalespersonSuggestions(data, peopleRows);
+  const platformSuggestions = getPlatformSuggestions(data, platformRows);
+
+  const updatePerson = (id: string, field: keyof SalesBySalesperson, value: string) => {
+    setPeopleRows(
+      peopleRows.map((row) =>
+        row.id === id
+          ? normalizePerson({
+              ...row,
+              [field]: numericField(field) ? Number(value) : value,
+              ocrReviewStatus: "ok",
+              ocrReviewNotes: row.ocrReviewStatus === "needs_review" ? "تمت مراجعة الصف يدويًا" : row.ocrReviewNotes
+            })
+          : row
+      )
+    );
+  };
+
+  const updatePlatform = (id: string, field: keyof SalesByPlatform, value: string) => {
+    setPlatformRows(
+      platformRows.map((row) =>
+        row.id === id
+          ? normalizePlatform({
+              ...row,
+              [field]: numericField(field) ? Number(value) : value,
+              ocrReviewStatus: "ok",
+              ocrReviewNotes: row.ocrReviewStatus === "needs_review" ? "تمت مراجعة الصف يدويًا" : row.ocrReviewNotes
+            })
+          : row
+      )
+    );
+  };
+
+  const resetPerson = (id: string) => {
+    const original = originalPeopleRows.find((row) => row.id === id);
+    if (original) setPeopleRows(peopleRows.map((row) => (row.id === id ? { ...original } : row)));
+  };
+
+  const resetPlatform = (id: string) => {
+    const original = originalPlatformRows.find((row) => row.id === id);
+    if (original) setPlatformRows(platformRows.map((row) => (row.id === id ? { ...original } : row)));
+  };
+
+  return (
+    <div className="manual-review">
+      <div className="table-header">
+        <div>
+          <h2>Manual OCR Review</h2>
+          <p className="review-subtitle">راجعي أسماء السيلز والصفحات والأرقام قبل الحفظ. أي تصحيح يتم حفظه يتطبق تلقائيًا في الرفعات القادمة.</p>
+        </div>
+        <div className="table-tools">
+          <button onClick={() => setPeopleRows([...peopleRows, blankPerson(reportDate, sourceFileId)])}>Add Missing Salesperson Row</button>
+          <button onClick={() => setPlatformRows([...platformRows, blankPlatform(reportDate, sourceFileId)])}>Add Missing Page Row</button>
+        </div>
+      </div>
+      <datalist id="salesperson-suggestions">
+        {salespersonSuggestions.map((name) => <option value={name} key={name} />)}
+      </datalist>
+      <datalist id="platform-suggestions">
+        {platformSuggestions.map((name) => <option value={name} key={name} />)}
+      </datalist>
+      <div className="table-wrap">
+        <table className="review-table">
+          <thead>
+            <tr>
+              <th>Page / Platform Name</th>
+              <th>Salesperson Name</th>
+              <th>Salesperson Code</th>
+              <th>Morning Orders</th>
+              <th>Morning Value</th>
+              <th>Evening Orders</th>
+              <th>Evening Value</th>
+              <th>Total Orders</th>
+              <th>Total Value</th>
+              <th>OCR Confidence</th>
+              <th>Notes</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {peopleRows.map((row) => (
+              <tr key={row.id} className={reviewRowClass(row)}>
+                <td><span className="muted-cell">Sales row</span></td>
+                <td><input list="salesperson-suggestions" value={row.salespersonName} onChange={(event) => updatePerson(row.id, "salespersonName", event.target.value)} /></td>
+                <td><input value={row.salespersonCode} onChange={(event) => updatePerson(row.id, "salespersonCode", event.target.value)} /></td>
+                <td><input type="number" value={row.morningOrders} onChange={(event) => updatePerson(row.id, "morningOrders", event.target.value)} /></td>
+                <td><input type="number" value={row.morningRevenue} onChange={(event) => updatePerson(row.id, "morningRevenue", event.target.value)} /></td>
+                <td><input type="number" value={row.eveningOrders} onChange={(event) => updatePerson(row.id, "eveningOrders", event.target.value)} /></td>
+                <td><input type="number" value={row.eveningRevenue} onChange={(event) => updatePerson(row.id, "eveningRevenue", event.target.value)} /></td>
+                <td>{integer(row.totalOrders)}</td>
+                <td>{money(row.totalRevenue)}</td>
+                <td><Badge text={reviewConfidenceLabel(row)} /></td>
+                <td><input value={row.ocrReviewNotes ?? ocrWarningMessages(row).join("، ")} onChange={(event) => updatePerson(row.id, "ocrReviewNotes", event.target.value)} /></td>
+                <td>
+                  <div className="inline-actions">
+                    <button onClick={() => updatePerson(row.id, "ocrReviewStatus", "ok")}>Confirm</button>
+                    <button onClick={() => resetPerson(row.id)}>Reset Row</button>
+                    <button onClick={() => setPeopleRows(peopleRows.filter((item) => item.id !== row.id))}>Delete Row</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {platformRows.map((row) => (
+              <tr key={row.id} className={reviewRowClass(row)}>
+                <td><input list="platform-suggestions" value={row.platformName} onChange={(event) => updatePlatform(row.id, "platformName", event.target.value)} /></td>
+                <td><span className="muted-cell">Page row</span></td>
+                <td><span className="muted-cell">-</span></td>
+                <td><input type="number" value={row.morningOrders} onChange={(event) => updatePlatform(row.id, "morningOrders", event.target.value)} /></td>
+                <td><input type="number" value={row.morningRevenue} onChange={(event) => updatePlatform(row.id, "morningRevenue", event.target.value)} /></td>
+                <td><input type="number" value={row.eveningOrders} onChange={(event) => updatePlatform(row.id, "eveningOrders", event.target.value)} /></td>
+                <td><input type="number" value={row.eveningRevenue} onChange={(event) => updatePlatform(row.id, "eveningRevenue", event.target.value)} /></td>
+                <td>{integer(row.totalOrders)}</td>
+                <td>{money(row.totalRevenue)}</td>
+                <td><Badge text={reviewConfidenceLabel(row)} /></td>
+                <td><input value={row.ocrReviewNotes ?? ocrWarningMessages(row).join("، ")} onChange={(event) => updatePlatform(row.id, "ocrReviewNotes", event.target.value)} /></td>
+                <td>
+                  <div className="inline-actions">
+                    <button onClick={() => updatePlatform(row.id, "ocrReviewStatus", "ok")}>Confirm</button>
+                    <button onClick={() => resetPlatform(row.id)}>Reset Row</button>
+                    <button onClick={() => setPlatformRows(platformRows.filter((item) => item.id !== row.id))}>Delete Row</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function EditablePeopleTable({ rows, setRows }: { rows: SalesBySalesperson[]; setRows: (rows: SalesBySalesperson[]) => void }) {
   const update = (id: string, field: keyof SalesBySalesperson, value: string) => {
     setRows(rows.map((row) => (row.id === id ? normalizePerson({ ...row, [field]: numericField(field) ? Number(value) : value }) : row)));
@@ -1608,6 +1792,273 @@ function TableHeader({ title, query, setQuery, onExport }: { title: string; quer
 function Badge({ text }: { text: string }) {
   return <span className="badge">{text}</span>;
 }
+
+const cloneSalesRows = <T extends SalesBySalesperson | SalesByPlatform>(rows: T[]): T[] =>
+  rows.map((row) => ({ ...row, ocrFieldWarnings: { ...(row.ocrFieldWarnings ?? {}) } }));
+
+const reviewRowClass = (row: SalesBySalesperson | SalesByPlatform) => {
+  if (row.ocrReviewStatus === "needs_review" || (row.ocrConfidence ?? 100) < 70) return "review-needs";
+  if (row.ocrReviewStatus === "auto_corrected") return "review-auto";
+  return "";
+};
+
+const reviewConfidenceLabel = (row: SalesBySalesperson | SalesByPlatform) => {
+  const confidence = row.ocrConfidence ?? 100;
+  const status =
+    row.ocrReviewStatus === "auto_corrected"
+      ? "Auto-corrected"
+      : row.ocrReviewStatus === "needs_review"
+        ? "Needs Review"
+        : "OK";
+  return `${confidence}% · ${status}`;
+};
+
+const getSalespersonSuggestions = (data: AppData, rows: SalesBySalesperson[]) =>
+  uniqueValues([
+    ...data.salespeople.filter((item) => item.active).map((item) => item.name),
+    ...data.ocrSalespersonCorrections.map((item) => item.correctValue),
+    ...data.salesBySalesperson.map((item) => item.salespersonName),
+    ...rows.map((item) => item.salespersonName)
+  ]);
+
+const getPlatformSuggestions = (data: AppData, rows: SalesByPlatform[]) =>
+  uniqueValues([
+    ...data.platforms.filter((item) => item.active).map((item) => item.name),
+    ...data.platformSettings.filter((item) => item.isActive).map((item) => item.platformName),
+    ...data.ocrPageCorrections.map((item) => item.correctValue),
+    ...data.salesByPlatform.map((item) => item.platformName),
+    ...rows.map((item) => item.platformName)
+  ]);
+
+const uniqueValues = (values: string[]) =>
+  [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "ar"));
+
+const applyOcrCorrections = (
+  data: AppData,
+  people: SalesBySalesperson[],
+  platforms: SalesByPlatform[]
+): { people: SalesBySalesperson[]; platforms: SalesByPlatform[] } => ({
+  people: people.map((row) => applySalespersonCorrection(data, row)),
+  platforms: platforms.map((row) => applyPlatformCorrection(data, row))
+});
+
+const applySalespersonCorrection = (data: AppData, row: SalesBySalesperson): SalesBySalesperson => {
+  const originalName = row.salespersonName;
+  const notes: string[] = [];
+  let nextName = originalName;
+  let status: SalesBySalesperson["ocrReviewStatus"] = row.ocrReviewStatus ?? "ok";
+
+  const byCode = row.salespersonCode
+    ? data.salespeople.find((person) => person.active && person.code === row.salespersonCode)
+    : undefined;
+  if (byCode && byCode.name && byCode.name !== nextName) {
+    nextName = byCode.name;
+    status = "auto_corrected";
+    notes.push("Auto-corrected by salesperson code");
+  }
+
+  const correction = findCorrection(data.ocrSalespersonCorrections, originalName, row.salespersonCode);
+  if (!byCode && correction && correction.correctValue !== nextName) {
+    nextName = correction.correctValue;
+    status = "auto_corrected";
+    notes.push("Auto-corrected from saved correction");
+  }
+
+  if (!nextName.trim() || (row.ocrConfidence ?? 100) < 70) {
+    status = "needs_review";
+    notes.push("Unknown / low confidence");
+  }
+
+  return {
+    ...row,
+    salespersonName: nextName,
+    ocrOriginalName: originalName,
+    ocrReviewStatus: status,
+    ocrReviewNotes: notes.length ? notes.join("، ") : row.ocrReviewNotes
+  };
+};
+
+const applyPlatformCorrection = (data: AppData, row: SalesByPlatform): SalesByPlatform => {
+  const originalName = row.platformName;
+  const notes: string[] = [];
+  let nextName = originalName;
+  let status: SalesByPlatform["ocrReviewStatus"] = row.ocrReviewStatus ?? "ok";
+
+  const correction = findCorrection(data.ocrPageCorrections, originalName);
+  if (correction && correction.correctValue !== nextName) {
+    nextName = correction.correctValue;
+    status = "auto_corrected";
+    notes.push("Auto-corrected from saved page correction");
+  } else {
+    const platform = findBestPlatformMaster(data, originalName);
+    if (platform && platform.name !== nextName) {
+      nextName = platform.name;
+      status = "auto_corrected";
+      notes.push("Auto-corrected from platform master data");
+    }
+  }
+
+  if (!nextName.trim() || (row.ocrConfidence ?? 100) < 70) {
+    status = "needs_review";
+    notes.push("Unknown / low confidence");
+  }
+
+  return {
+    ...row,
+    platformName: nextName,
+    ocrOriginalName: originalName,
+    ocrReviewStatus: status,
+    ocrReviewNotes: notes.length ? notes.join("، ") : row.ocrReviewNotes
+  };
+};
+
+const findCorrection = <T extends OcrPageCorrection | OcrSalespersonCorrection>(
+  corrections: T[],
+  wrongValue: string,
+  salespersonCode = ""
+) => {
+  const normalizedWrong = normalizeOcrLookupText(wrongValue);
+  if (!normalizedWrong) return undefined;
+  return corrections.find((item) => {
+    const codeMatches = !("salespersonCode" in item) || !salespersonCode || item.salespersonCode === salespersonCode;
+    return codeMatches && normalizeOcrLookupText(item.wrongValue) === normalizedWrong;
+  });
+};
+
+const findBestPlatformMaster = (data: AppData, value: string) => {
+  const normalized = normalizeOcrLookupText(value);
+  if (!normalized) return undefined;
+  let best: { platform: PlatformMaster; score: number } | undefined;
+  const platformMasters = [
+    ...data.platforms,
+    ...data.platformSettings.map((item) => ({
+      id: item.id,
+      name: item.platformName,
+      aliases: [item.platformName],
+      active: item.isActive
+    }))
+  ];
+  for (const platform of platformMasters.filter((item) => item.active)) {
+    for (const alias of [platform.name, ...(platform.aliases ?? [])]) {
+      const aliasNormalized = normalizeOcrLookupText(alias);
+      const contains = normalized.includes(aliasNormalized) || aliasNormalized.includes(normalized);
+      const score = contains ? 0.94 : textSimilarity(normalized, aliasNormalized);
+      if (!best || score > best.score) best = { platform, score };
+    }
+  }
+  return best && best.score >= 0.72 ? best.platform : undefined;
+};
+
+const buildOcrLearningData = (
+  data: AppData,
+  originalPeople: SalesBySalesperson[],
+  correctedPeople: SalesBySalesperson[],
+  originalPlatforms: SalesByPlatform[],
+  correctedPlatforms: SalesByPlatform[]
+): AppData => {
+  const now = new Date().toISOString();
+  const pageCorrections = [...data.ocrPageCorrections];
+  const salespersonCorrections = [...data.ocrSalespersonCorrections];
+  const salespeople = [...data.salespeople];
+  const platforms = [...data.platforms];
+
+  for (const row of correctedPeople) {
+    const original = originalPeople.find((item) => item.id === row.id);
+    if (original?.salespersonName && row.salespersonName && normalizeOcrLookupText(original.salespersonName) !== normalizeOcrLookupText(row.salespersonName)) {
+      upsertSalespersonCorrection(salespersonCorrections, original.salespersonName, row.salespersonName, row.salespersonCode, now);
+    }
+    if (row.salespersonCode && row.salespersonName) {
+      const existing = salespeople.find((item) => item.code === row.salespersonCode);
+      if (existing) existing.name = row.salespersonName;
+      else salespeople.push({ id: createId(), code: row.salespersonCode, name: row.salespersonName, active: true });
+    }
+  }
+
+  for (const row of correctedPlatforms) {
+    const original = originalPlatforms.find((item) => item.id === row.id);
+    if (original?.platformName && row.platformName && normalizeOcrLookupText(original.platformName) !== normalizeOcrLookupText(row.platformName)) {
+      upsertPageCorrection(pageCorrections, original.platformName, row.platformName, now);
+    }
+    if (row.platformName) {
+      const existing = platforms.find((item) => normalizeOcrLookupText(item.name) === normalizeOcrLookupText(row.platformName));
+      if (existing) {
+        existing.aliases = uniqueValues([...existing.aliases, row.platformName, original?.platformName ?? ""]);
+        existing.active = true;
+      } else {
+        platforms.push({ id: createId(), name: row.platformName, aliases: uniqueValues([row.platformName, original?.platformName ?? ""]), active: true });
+      }
+    }
+  }
+
+  return {
+    ...data,
+    ocrPageCorrections: pageCorrections,
+    ocrSalespersonCorrections: salespersonCorrections,
+    salespeople,
+    platforms
+  };
+};
+
+const upsertPageCorrection = (rows: OcrPageCorrection[], wrongValue: string, correctValue: string, createdAt: string) => {
+  const existing = rows.find(
+    (row) => normalizeOcrLookupText(row.wrongValue) === normalizeOcrLookupText(wrongValue) && normalizeOcrLookupText(row.correctValue) === normalizeOcrLookupText(correctValue)
+  );
+  if (existing) existing.usageCount += 1;
+  else rows.push({ id: createId(), wrongValue, correctValue, createdAt, usageCount: 1 });
+};
+
+const upsertSalespersonCorrection = (
+  rows: OcrSalespersonCorrection[],
+  wrongValue: string,
+  correctValue: string,
+  salespersonCode: string,
+  createdAt: string
+) => {
+  const existing = rows.find(
+    (row) =>
+      normalizeOcrLookupText(row.wrongValue) === normalizeOcrLookupText(wrongValue) &&
+      normalizeOcrLookupText(row.correctValue) === normalizeOcrLookupText(correctValue) &&
+      row.salespersonCode === salespersonCode
+  );
+  if (existing) existing.usageCount += 1;
+  else rows.push({ id: createId(), wrongValue, correctValue, salespersonCode, createdAt, usageCount: 1 });
+};
+
+const normalizeOcrLookupText = (value: string) =>
+  value
+    .replace(/[إأآ]/g, "ا")
+    .replace(/[ة]/g, "ه")
+    .replace(/[ى]/g, "ي")
+    .replace(/[ؤئ]/g, "ء")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+const textSimilarity = (left: string, right: string) => {
+  if (!left && !right) return 1;
+  if (!left || !right) return 0;
+  const distance = textDistance(left, right);
+  return 1 - distance / Math.max(left.length, right.length, 1);
+};
+
+const textDistance = (left: string, right: string) => {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const saved = previous[j];
+      previous[j] = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        diagonal + (left[i - 1] === right[j - 1] ? 0 : 1)
+      );
+      diagonal = saved;
+    }
+  }
+  return previous[right.length];
+};
 
 const getMonthDays = (month: string) => {
   const [year, monthNumber] = month.split("-").map(Number);

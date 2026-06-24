@@ -3,9 +3,13 @@ import type {
   AdsRawFile,
   AdsRow,
   AppData,
+  OcrPageCorrection,
+  OcrSalespersonCorrection,
+  PlatformMaster,
   PlatformSetting,
   SalesByPlatform,
   SalesBySalesperson,
+  SalespersonMaster,
   SalesRawFile,
   UploadMode
 } from "../types";
@@ -46,6 +50,15 @@ export const emptyData = (): AppData => ({
     platformName,
     isActive: true,
     createdAt: new Date().toISOString()
+  })),
+  ocrPageCorrections: [],
+  ocrSalespersonCorrections: [],
+  salespeople: [],
+  platforms: defaultPlatforms.map((name) => ({
+    id: createId(),
+    name,
+    aliases: [name],
+    active: true
   }))
 });
 
@@ -65,6 +78,19 @@ const mergeDefaultPlatforms = (settings: PlatformSetting[] = []) => {
   return [...filteredSettings, ...missing];
 };
 
+const mergeDefaultPlatformMasters = (platforms: PlatformMaster[] = []) => {
+  const seen = new Set(platforms.map((item) => item.name.trim().toLowerCase()));
+  const missing = defaultPlatforms
+    .filter((name) => !seen.has(name.trim().toLowerCase()))
+    .map((name) => ({
+      id: createId(),
+      name,
+      aliases: [name],
+      active: true
+    }));
+  return [...platforms, ...missing];
+};
+
 export const loadData = async (): Promise<AppData> => {
   if (!supabase) return loadLocalData();
 
@@ -76,7 +102,11 @@ export const loadData = async (): Promise<AppData> => {
     adsRawFiles,
     metaAds,
     tiktokAds,
-    platformSettings
+    platformSettings,
+    ocrPageCorrections,
+    ocrSalespersonCorrections,
+    salespeople,
+    platforms
   ] = await Promise.all([
     selectAll("sales_raw_files"),
     selectAll("sales_by_salesperson"),
@@ -84,7 +114,11 @@ export const loadData = async (): Promise<AppData> => {
     selectAll("ads_raw_files"),
     selectAll("meta_ads"),
     selectAll("tiktok_ads"),
-    selectAll("platform_settings")
+    selectAll("platform_settings"),
+    selectOptionalAll("ocr_page_corrections"),
+    selectOptionalAll("ocr_salesperson_corrections"),
+    selectOptionalAll("salespeople"),
+    selectOptionalAll("platforms")
   ]);
 
   return {
@@ -94,7 +128,11 @@ export const loadData = async (): Promise<AppData> => {
     adsRawFiles: adsRawFiles.map(fromAdsRawFile),
     metaAds: metaAds.map((row) => fromAdsRow(row, "Meta")),
     tiktokAds: tiktokAds.map((row) => fromAdsRow(row, "TikTok")),
-    platformSettings: mergeDefaultPlatforms(platformSettings.map(fromPlatformSetting))
+    platformSettings: mergeDefaultPlatforms(platformSettings.map(fromPlatformSetting)),
+    ocrPageCorrections: ocrPageCorrections.map(fromOcrPageCorrection),
+    ocrSalespersonCorrections: ocrSalespersonCorrections.map(fromOcrSalespersonCorrection),
+    salespeople: salespeople.map(fromSalespersonMaster),
+    platforms: mergeDefaultPlatformMasters(platforms.map(fromPlatformMaster))
   };
 };
 
@@ -112,6 +150,10 @@ export const saveData = async (data: AppData) => {
   await insertRows("ads_raw_files", data.adsRawFiles.map(toAdsRawFileRow));
   await insertRows("meta_ads", data.metaAds.map(toMetaAdsRow));
   await insertRows("tiktok_ads", data.tiktokAds.map(toTikTokAdsRow));
+  await insertOptionalRows("ocr_page_corrections", data.ocrPageCorrections.map(toOcrPageCorrectionRow));
+  await insertOptionalRows("ocr_salesperson_corrections", data.ocrSalespersonCorrections.map(toOcrSalespersonCorrectionRow));
+  await insertOptionalRows("salespeople", data.salespeople.map(toSalespersonMasterRow));
+  await insertOptionalRows("platforms", data.platforms.map(toPlatformMasterRow));
   await refreshDailySummary(data);
 };
 
@@ -130,6 +172,10 @@ export const subscribeToDataChanges = (onChange: () => void) => {
     .on("postgres_changes", { event: "*", schema: "public", table: "meta_ads" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "tiktok_ads" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "platform_settings" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "ocr_page_corrections" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "ocr_salesperson_corrections" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "salespeople" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "platforms" }, onChange)
     .subscribe();
 
   return () => {
@@ -154,7 +200,11 @@ const loadLocalData = (): AppData => {
       tiktokAds: (parsed.tiktokAds ?? []).map(withAdsDefaults),
       platformSettings: mergeDefaultPlatforms(
         parsed.platformSettings?.length ? parsed.platformSettings : emptyData().platformSettings
-      )
+      ),
+      ocrPageCorrections: parsed.ocrPageCorrections ?? [],
+      ocrSalespersonCorrections: parsed.ocrSalespersonCorrections ?? [],
+      salespeople: parsed.salespeople ?? [],
+      platforms: mergeDefaultPlatformMasters(parsed.platforms ?? [])
     };
   } catch {
     return emptyData();
@@ -181,10 +231,34 @@ const selectAll = async (table: string) => {
   return data ?? [];
 };
 
+const isMissingTableError = (error: unknown) =>
+  Boolean(
+    error &&
+      typeof error === "object" &&
+      "message" in error &&
+      /does not exist|schema cache|Could not find the table/i.test(String((error as { message?: string }).message))
+  );
+
+const selectOptionalAll = async (table: string) => {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from(table).select("*");
+  if (error) {
+    if (isMissingTableError(error)) return [];
+    throw error;
+  }
+  return data ?? [];
+};
+
 const insertRows = async (table: string, rows: Record<string, unknown>[]) => {
   if (!supabase || rows.length === 0) return;
   const { error } = await supabase.from(table).insert(rows);
   if (error) throw error;
+};
+
+const insertOptionalRows = async (table: string, rows: Record<string, unknown>[]) => {
+  if (!supabase || rows.length === 0) return;
+  const { error } = await supabase.from(table).insert(rows);
+  if (error && !isMissingTableError(error)) throw error;
 };
 
 const deleteWhere = async (table: string, filters: (query: any) => any) => {
@@ -199,6 +273,12 @@ const deleteAll = async (table: string) => {
   if (error) throw error;
 };
 
+const deleteOptionalAll = async (table: string) => {
+  if (!supabase) return;
+  const { error } = await supabase.from(table).delete().not("id", "is", null);
+  if (error && !isMissingTableError(error)) throw error;
+};
+
 const deleteAllTables = async () => {
   await deleteAll("daily_summary");
   await deleteAll("meta_ads");
@@ -208,6 +288,10 @@ const deleteAllTables = async () => {
   await deleteAll("sales_by_salesperson");
   await deleteAll("sales_raw_files");
   await deleteAll("platform_settings");
+  await deleteOptionalAll("ocr_page_corrections");
+  await deleteOptionalAll("ocr_salesperson_corrections");
+  await deleteOptionalAll("salespeople");
+  await deleteOptionalAll("platforms");
 };
 
 const refreshDailySummary = async (data: AppData) => {
@@ -663,4 +747,66 @@ const toPlatformSettingRow = (row: PlatformSetting) => ({
   platform_name: row.platformName,
   is_active: row.isActive,
   created_at: row.createdAt
+});
+
+const fromOcrPageCorrection = (row: any): OcrPageCorrection => ({
+  id: row.id,
+  wrongValue: row.wrong_value,
+  correctValue: row.correct_value,
+  createdAt: row.created_at,
+  usageCount: Number(row.usage_count) || 0
+});
+
+const toOcrPageCorrectionRow = (row: OcrPageCorrection) => ({
+  id: row.id,
+  wrong_value: row.wrongValue,
+  correct_value: row.correctValue,
+  created_at: row.createdAt,
+  usage_count: row.usageCount
+});
+
+const fromOcrSalespersonCorrection = (row: any): OcrSalespersonCorrection => ({
+  id: row.id,
+  wrongValue: row.wrong_value,
+  correctValue: row.correct_value,
+  salespersonCode: row.salesperson_code || "",
+  createdAt: row.created_at,
+  usageCount: Number(row.usage_count) || 0
+});
+
+const toOcrSalespersonCorrectionRow = (row: OcrSalespersonCorrection) => ({
+  id: row.id,
+  wrong_value: row.wrongValue,
+  correct_value: row.correctValue,
+  salesperson_code: row.salespersonCode,
+  created_at: row.createdAt,
+  usage_count: row.usageCount
+});
+
+const fromSalespersonMaster = (row: any): SalespersonMaster => ({
+  id: row.id,
+  code: row.code || "",
+  name: row.name || "",
+  active: Boolean(row.active)
+});
+
+const toSalespersonMasterRow = (row: SalespersonMaster) => ({
+  id: row.id,
+  code: row.code,
+  name: row.name,
+  active: row.active
+});
+
+const fromPlatformMaster = (row: any): PlatformMaster => ({
+  id: row.id,
+  name: row.name || "",
+  aliases: Array.isArray(row.aliases) ? row.aliases : [],
+  active: Boolean(row.active)
+});
+
+const toPlatformMasterRow = (row: PlatformMaster) => ({
+  id: row.id,
+  name: row.name,
+  aliases: row.aliases,
+  active: row.active
 });

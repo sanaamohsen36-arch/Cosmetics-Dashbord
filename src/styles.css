@@ -1676,6 +1676,54 @@ tbody tr:hover td {
   border-right: 5px solid var(--blue-500);
 }
 
+.manual-review {
+  display: grid;
+  gap: 14px;
+}
+
+.review-subtitle {
+  margin: 6px 0 0;
+  color: #64748b;
+}
+
+.review-table {
+  min-width: 1380px;
+}
+
+.review-table td input {
+  min-width: 132px;
+}
+
+.review-table td:nth-child(11) input {
+  min-width: 220px;
+}
+
+.muted-cell {
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+tr.review-needs td {
+  background: #fff7ed;
+}
+
+tr.review-auto td {
+  background: #eff6ff;
+}
+
+.app-shell.dark .review-subtitle,
+.app-shell.dark .muted-cell {
+  color: #94a3b8;
+}
+
+.app-shell.dark tr.review-needs td {
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.app-shell.dark tr.review-auto td {
+  background: rgba(37, 99, 235, 0.12);
+}
+
 .modal-backdrop {
   backdrop-filter: blur(8px);
 }

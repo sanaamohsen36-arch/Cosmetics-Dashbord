@@ -32,6 +32,9 @@ export interface SalesBySalesperson {
   ocrFieldConfidence?: OcrFieldConfidence;
   ocrFieldWarnings?: OcrFieldWarnings;
   ocrCellImages?: OcrCellImages;
+  ocrOriginalName?: string;
+  ocrReviewStatus?: "ok" | "auto_corrected" | "needs_review";
+  ocrReviewNotes?: string;
 }
 
 export interface SalesByPlatform {
@@ -50,6 +53,9 @@ export interface SalesByPlatform {
   ocrFieldConfidence?: OcrFieldConfidence;
   ocrFieldWarnings?: OcrFieldWarnings;
   ocrCellImages?: OcrCellImages;
+  ocrOriginalName?: string;
+  ocrReviewStatus?: "ok" | "auto_corrected" | "needs_review";
+  ocrReviewNotes?: string;
 }
 
 export interface AdsRawFile {
@@ -97,6 +103,37 @@ export interface PlatformSetting {
   createdAt: string;
 }
 
+export interface OcrPageCorrection {
+  id: string;
+  wrongValue: string;
+  correctValue: string;
+  createdAt: string;
+  usageCount: number;
+}
+
+export interface OcrSalespersonCorrection {
+  id: string;
+  wrongValue: string;
+  correctValue: string;
+  salespersonCode: string;
+  createdAt: string;
+  usageCount: number;
+}
+
+export interface SalespersonMaster {
+  id: string;
+  code: string;
+  name: string;
+  active: boolean;
+}
+
+export interface PlatformMaster {
+  id: string;
+  name: string;
+  aliases: string[];
+  active: boolean;
+}
+
 export interface DateRange {
   from: string;
   to: string;
@@ -110,6 +147,10 @@ export interface AppData {
   metaAds: AdsRow[];
   tiktokAds: AdsRow[];
   platformSettings: PlatformSetting[];
+  ocrPageCorrections: OcrPageCorrection[];
+  ocrSalespersonCorrections: OcrSalespersonCorrection[];
+  salespeople: SalespersonMaster[];
+  platforms: PlatformMaster[];
 }
 
 export interface Kpis {
