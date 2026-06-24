@@ -103,6 +103,19 @@ const pageNames = [
   { canonical: "إجمالي اليوم", aliases: ["اجمالي اليوم", "إجمالي اليوم", "daily total"] }
 ];
 
+const fixedPlatformRowNames = [
+  "Regenix eg",
+  "واتس اب ريجينكس",
+  "ريجينكس",
+  "واتس اب تيك توك",
+  "Website CELIXI",
+  "إجمالي السوشيال",
+  "تليفون اعلان",
+  "تيم المتابعه",
+  "المتابعه",
+  "إجمالي اليوم"
+];
+
 export const extractFixedTemplateSales = async (
   file: File,
   onProgress: (message: string, progress: number) => void
@@ -140,14 +153,16 @@ export const extractFixedTemplateSales = async (
     maxRows: 32
   });
 
+  const normalizedPlatformRows = normalizePlatformRows(platformRows);
+
   const debugImages = [
-    drawDebugOverlay(canvas, platformRows, platformColumns, "جدول الصفحات"),
+    drawDebugOverlay(canvas, normalizedPlatformRows, platformColumns, "جدول الصفحات"),
     drawDebugOverlay(canvas, salesRows, salesColumns, "جدول السيلز")
   ];
 
   onProgress("قراءة خلايا الصفحات", 22);
   const platforms = await extractRows(canvas, platformColumns, {
-    rows: platformRows,
+    rows: normalizedPlatformRows,
     kind: "platform"
   });
 
@@ -170,14 +185,17 @@ const extractRows = async (
   options: { rows: RowRange[]; kind: "sales" | "platform" }
 ) => {
   const rows: FixedTemplateRow[] = [];
-  for (const rowRange of options.rows) {
+  for (const [rowIndex, rowRange] of options.rows.entries()) {
     const read = async (field: CellKey, numeric: boolean) => {
       const [x1, x2] = columns[field];
       if (x1 === x2) return { text: "", confidence: 100, image: "", hadLetters: false, pass: "normal" as const };
       return recognizeCellWithRetry(canvas, { x1, x2, y1: rowRange.y1, y2: rowRange.y2 }, numeric, field);
     };
 
-    const nameCell = await read("name", false);
+    const nameCell =
+      options.kind === "platform"
+        ? captureCell(canvas, { x1: columns.name[0], x2: columns.name[1], y1: rowRange.y1, y2: rowRange.y2 })
+        : await read("name", false);
     const codeCell = options.kind === "sales" ? await read("code", true) : { text: "", confidence: 100, image: "", hadLetters: false };
     const morningOrders = await read("morningOrders", true);
     const morningRevenue = await read("morningRevenue", true);
@@ -212,7 +230,8 @@ const extractRows = async (
 
     const totalOrders = values.morningOrders + values.eveningOrders;
     const totalRevenue = values.morningRevenue + values.eveningRevenue;
-    const name = options.kind === "platform" ? normalizePageName(nameCell.text, warnings) : cleanText(nameCell.text);
+    const fixedPlatformName = options.kind === "platform" ? fixedPlatformRowNames[rowIndex] : "";
+    const name = fixedPlatformName || cleanText(nameCell.text);
     const confidence = average(Object.values(fieldConfidence));
 
     if (confidence < 72) addWarning(warnings, "row", "ثقة OCR منخفضة، راجع الصف قبل الحفظ");
@@ -295,6 +314,14 @@ const recognizeCell = async (
   };
 };
 
+const captureCell = (canvas: HTMLCanvasElement, range: CropRange): OcrCell => ({
+  text: "",
+  confidence: 100,
+  image: cropCanvas(canvas, range, false, "tight").toDataURL("image/png"),
+  hadLetters: false,
+  pass: "tight"
+});
+
 const preprocessReportImage = async (file: File) => {
   const image = await loadImage(file);
   const scale = Math.min(3, Math.max(2, 2800 / Math.max(image.naturalWidth || image.width, 1)));
@@ -365,6 +392,41 @@ const detectRowRanges = (canvas: HTMLCanvasElement, options: RowDetectionOptions
   return fallbackRows(options);
 };
 
+const normalizePlatformRows = (rows: RowRange[]): RowRange[] => {
+  if (rows.length >= fixedPlatformRowNames.length) return rows.slice(0, fixedPlatformRowNames.length).map(tightenRowRange);
+  if (rows.length >= 2) {
+    const step = median(rows.slice(1).map((row, index) => row.y1 - rows[index].y1));
+    const height = median(rows.map((row) => row.y2 - row.y1));
+    return Array.from({ length: fixedPlatformRowNames.length }, (_, index) =>
+      tightenRowRange({
+        y1: rows[0].y1 + index * step,
+        y2: rows[0].y1 + index * step + height
+      })
+    );
+  }
+  return fallbackRows({
+    x1: 0,
+    x2: 0.477,
+    y1: 0.145,
+    y2: 0.56,
+    contentY1: 0.19,
+    contentY2: 0.535,
+    fallbackFirstRowTop: 0.195,
+    fallbackRowHeight: 0.0355,
+    fallbackRowCount: fixedPlatformRowNames.length,
+    minRows: fixedPlatformRowNames.length,
+    maxRows: fixedPlatformRowNames.length
+  }).map(tightenRowRange);
+};
+
+const tightenRowRange = (row: RowRange): RowRange => {
+  const inset = (row.y2 - row.y1) * 0.12;
+  return {
+    y1: row.y1 + inset,
+    y2: row.y2 - inset
+  };
+};
+
 const detectHorizontalLineCenters = (canvas: HTMLCanvasElement, options: RowDetectionOptions) => {
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) return [];
@@ -429,6 +491,8 @@ const percentile = (values: number[], ratio: number) => {
   return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * ratio)))] ?? 0;
 };
 
+const median = (values: number[]) => percentile(values.filter((value) => Number.isFinite(value) && value > 0), 0.5);
+
 const drawDebugOverlay = (source: HTMLCanvasElement, rows: RowRange[], columns: Record<CellKey, [number, number]>, title: string) => {
   const maxWidth = 1400;
   const scale = Math.min(1, maxWidth / source.width);
@@ -464,11 +528,12 @@ const drawDebugOverlay = (source: HTMLCanvasElement, rows: RowRange[], columns: 
 
 const cropCanvas = (source: HTMLCanvasElement, range: CropRange, numeric: boolean, pass: "normal" | "tight" | "wide") => {
   const padX = pass === "tight" ? 0.001 : pass === "wide" ? 0.006 : numeric ? 0.002 : 0.002;
-  const padY = pass === "tight" ? 0.001 : pass === "wide" ? 0.006 : 0.002;
+  const verticalInset = numeric ? 0.002 : 0;
   const x = Math.max(0, Math.floor((range.x1 - padX) * source.width));
-  const y = Math.max(0, Math.floor((range.y1 - padY) * source.height));
+  const y = Math.max(0, Math.floor((range.y1 + verticalInset) * source.height));
   const width = Math.min(source.width - x, Math.ceil((range.x2 - range.x1 + padX * 2) * source.width));
-  const height = Math.min(source.height - y, Math.ceil((range.y2 - range.y1 + padY * 2) * source.height));
+  const rangeHeight = Math.max(0.001, range.y2 - range.y1 - verticalInset * 2);
+  const height = Math.min(source.height - y, Math.ceil(rangeHeight * source.height));
   const crop = document.createElement("canvas");
   crop.width = Math.max(width * 2, 80);
   crop.height = Math.max(height * 2, 40);
