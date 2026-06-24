@@ -8,6 +8,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -19,11 +20,14 @@ import {
   FileSpreadsheet,
   Gauge,
   LayoutDashboard,
+  Moon,
   Plus,
   Save,
   Search,
   Settings,
+  Sun,
   UploadCloud,
+  UserCircle,
   Users
 } from "lucide-react";
 import type {
@@ -168,6 +172,19 @@ export default function App() {
             );
           })}
         </nav>
+        <div className="sidebar-footer">
+          <button className="theme-toggle" onClick={toggleTheme}>
+            {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            <span>{theme === "dark" ? "Light Mode" : "Dark Mode"}</span>
+          </button>
+          <div className="admin-card">
+            <UserCircle size={22} />
+            <div>
+              <strong>Admin</strong>
+              <small>{getStorageMode()}</small>
+            </div>
+          </div>
+        </div>
       </aside>
 
       <main className="main">
@@ -181,7 +198,6 @@ export default function App() {
             {(page === "upload" || page === "dashboard") && (
               <DateControls range={range} setRange={setRange} />
             )}
-            <button className="theme-toggle" onClick={toggleTheme}>{theme === "dark" ? "Light" : "Dark"}</button>
           </div>
         </header>
 
@@ -923,6 +939,7 @@ function DashboardPage({
               <XAxis dataKey="date" stroke="#94a3b8" tick={{ fontSize: 12 }} />
               <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
               <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
+              <Legend verticalAlign="top" height={34} iconType="circle" />
               <Line type="monotone" dataKey="revenue" name="المبيعات" stroke="#38bdf8" strokeWidth={3} />
               <Line type="monotone" dataKey="orders" name="الطلبات" stroke="#34d399" strokeWidth={3} />
             </LineChart>
@@ -935,6 +952,7 @@ function DashboardPage({
               <XAxis dataKey="date" stroke="#94a3b8" tick={{ fontSize: 12 }} />
               <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
               <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
+              <Legend verticalAlign="top" height={34} iconType="circle" />
               <Line type="monotone" dataKey="spend" name="المصروف" stroke="#f59e0b" strokeWidth={3} />
               <Line type="monotone" dataKey="roas" name="ROAS" stroke="#a78bfa" strokeWidth={3} />
             </LineChart>
@@ -947,6 +965,7 @@ function DashboardPage({
               <XAxis dataKey="name" stroke="#94a3b8" tick={{ fontSize: 12 }} />
               <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
               <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
+              <Legend verticalAlign="top" height={34} iconType="circle" />
               <Bar dataKey="orders" name="طلبات" fill="#22c55e" radius={[8, 8, 0, 0]} />
               <Bar dataKey="revenue" name="قيمة" fill="#0ea5e9" radius={[8, 8, 0, 0]} />
             </BarChart>
@@ -959,6 +978,7 @@ function DashboardPage({
               <XAxis dataKey="salespersonName" stroke="#94a3b8" tick={{ fontSize: 11 }} interval={0} angle={-18} textAnchor="end" height={52} />
               <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
               <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
+              <Legend verticalAlign="top" height={34} iconType="circle" />
               <Bar dataKey="totalRevenue" name="قيمة" fill="#38bdf8" radius={[8, 8, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -970,6 +990,7 @@ function DashboardPage({
               <XAxis dataKey="platformName" stroke="#94a3b8" tick={{ fontSize: 11 }} interval={0} angle={-18} textAnchor="end" height={52} />
               <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
               <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
+              <Legend verticalAlign="top" height={34} iconType="circle" />
               <Bar dataKey="totalOrders" name="طلبات" fill="#34d399" radius={[8, 8, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -1556,6 +1577,7 @@ function OcrDebugDetails({
 function Kpi({ title, value, compact = false }: { title: string; value: string; compact?: boolean }) {
   return (
     <article className={`kpi-card ${compact ? "compact" : ""}`}>
+      <span className="kpi-accent" />
       <span>{title}</span>
       <strong>{value}</strong>
     </article>
