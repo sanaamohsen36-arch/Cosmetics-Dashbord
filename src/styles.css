@@ -333,6 +333,34 @@ input[type="file"] {
   text-align: left;
 }
 
+.hidden-file-input {
+  display: none;
+}
+
+.file-status-card {
+  border: 1px solid #dbe5f1;
+  border-radius: 12px;
+  background: #ffffff;
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.06);
+}
+
+.file-status-card strong,
+.file-status-card small {
+  display: block;
+}
+
+.file-status-card small {
+  color: #64748b;
+  margin-top: 4px;
+}
+
 .status-line {
   color: #bae6fd;
   margin: 14px 0 0;
@@ -1713,6 +1741,16 @@ tr.review-auto td {
 
 .app-shell.dark .review-subtitle,
 .app-shell.dark .muted-cell {
+  color: #94a3b8;
+}
+
+.app-shell.dark .file-status-card {
+  background: #0a1320;
+  border-color: #263241;
+  box-shadow: none;
+}
+
+.app-shell.dark .file-status-card small {
   color: #94a3b8;
 }
 

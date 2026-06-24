@@ -752,12 +752,12 @@ const salesAliases = {
   pageName: ["page_name", "page name", "platform", "platform_name", "الصفحة", "اسم الصفحة", "البلاتفورم"],
   salespersonCode: ["salesperson_code", "salesperson code", "code", "كود السيلز", "الكود"],
   salespersonName: ["salesperson_name", "salesperson name", "name", "السيلز", "اسم السيلز", "الاسم"],
-  morningOrders: ["morning_orders", "morning orders", "طلبات صباحي", "عدد صباحي"],
-  morningValue: ["morning_value", "morning value", "morning_revenue", "قيمة صباحي"],
-  eveningOrders: ["evening_orders", "evening orders", "طلبات مسائي", "عدد مسائي"],
-  eveningValue: ["evening_value", "evening value", "evening_revenue", "قيمة مسائي"],
-  totalOrders: ["total_orders", "total orders", "اجمالي الطلبات", "إجمالي الطلبات"],
-  totalValue: ["total_value", "total value", "total_revenue", "اجمالي القيمة", "إجمالي القيمة"]
+  morningOrders: ["morning_orders", "morning orders", "طلبات صباحي", "عدد صباحي", "صباحي - العدد", "صباحي - عدد الاوردرات"],
+  morningValue: ["morning_value", "morning value", "morning_revenue", "قيمة صباحي", "صباحي - القيمة", "صباحي - قيمة الاوردرات"],
+  eveningOrders: ["evening_orders", "evening orders", "طلبات مسائي", "عدد مسائي", "مسائي - العدد", "مسائي - عدد الاوردرات"],
+  eveningValue: ["evening_value", "evening value", "evening_revenue", "قيمة مسائي", "مسائي - القيمة", "مسائي - قيمة الاوردرات"],
+  totalOrders: ["total_orders", "total orders", "اجمالي الطلبات", "إجمالي الطلبات", "الاجمالي - العدد", "اجمالي اليوم - عدد الاوردرات"],
+  totalValue: ["total_value", "total value", "total_revenue", "اجمالي القيمة", "إجمالي القيمة", "الاجمالي - القيمة", "اجمالي اليوم - قيمة الاوردرات"]
 };
 
 type SalesSection = "pages" | "salespeople";
@@ -794,6 +794,9 @@ export const parseSalesWorkbook = async (
 };
 
 const extractSalesSections = (rows: unknown[][], sheetName: string): Array<{ type: SalesSection; rows: Record<string, unknown>[] }> => {
+  const sideBySide = extractSideBySideSalesSections(rows);
+  if (sideBySide.length) return sideBySide;
+
   const sections: Array<{ type: SalesSection; rows: Record<string, unknown>[] }> = [];
   const sheetType = detectSalesSectionType([sheetName]);
 
@@ -842,6 +845,54 @@ const extractSalesSections = (rows: unknown[][], sheetName: string): Array<{ typ
   return sections;
 };
 
+const extractSideBySideSalesSections = (rows: unknown[][]): Array<{ type: SalesSection; rows: Record<string, unknown>[] }> => {
+  for (let index = 0; index < rows.length; index += 1) {
+    const header = rows[index].map((cell) => String(cell ?? ""));
+    const normalized = header.map(normalizeHeader);
+    const pageNameIndex = findHeaderIndex(normalized, salesAliases.pageName);
+    const salespersonCodeIndex = findHeaderIndex(normalized, salesAliases.salespersonCode);
+    const salespersonNameIndex = findHeaderIndex(normalized, salesAliases.salespersonName);
+
+    if (pageNameIndex < 0 || salespersonCodeIndex < 0 || salespersonNameIndex < 0 || salespersonCodeIndex <= pageNameIndex) continue;
+
+    const pageIndexes = Array.from({ length: salespersonCodeIndex - pageNameIndex }, (_, offset) => pageNameIndex + offset).filter(
+      (cellIndex) => header[cellIndex]?.trim()
+    );
+    const salespersonIndexes = Array.from({ length: header.length - salespersonCodeIndex }, (_, offset) => salespersonCodeIndex + offset).filter(
+      (cellIndex) => header[cellIndex]?.trim()
+    );
+
+    const pages = collectIndexedRows(rows.slice(index + 1), header, pageIndexes);
+    const people = collectIndexedRows(rows.slice(index + 1), header, salespersonIndexes);
+
+    return [
+      { type: "pages", rows: pages },
+      { type: "salespeople", rows: people }
+    ].filter((section) => section.rows.length) as Array<{ type: SalesSection; rows: Record<string, unknown>[] }>;
+  }
+  return [];
+};
+
+const collectIndexedRows = (rows: unknown[][], header: string[], indexes: number[]) => {
+  const output: Record<string, unknown>[] = [];
+  for (const rowCells of rows) {
+    const hasValue = indexes.some((cellIndex) => String(rowCells[cellIndex] ?? "").trim());
+    if (!hasValue) continue;
+    const row: Record<string, unknown> = {};
+    indexes.forEach((cellIndex) => {
+      const key = normalizeHeader(header[cellIndex] ?? "");
+      if (key) row[key] = rowCells[cellIndex] ?? "";
+    });
+    output.push(row);
+  }
+  return output;
+};
+
+const findHeaderIndex = (headers: string[], names: string[]) => {
+  const normalizedNames = names.map(normalizeHeader);
+  return headers.findIndex((header) => normalizedNames.includes(header));
+};
+
 const detectSalesSectionType = (values: string[]): SalesSection | null => {
   const normalized = values.map(normalizeHeader).join(" ");
   if (/pages_sales|page_name|platform_name|اسم الصفحة|الصفحة/.test(normalized)) return "pages";
@@ -882,8 +933,8 @@ const salesPlatformFromRow = (
     morningRevenue,
     eveningOrders,
     eveningRevenue,
-    totalOrders: morningOrders + eveningOrders,
-    totalRevenue: morningRevenue + eveningRevenue,
+    totalOrders: providedTotalOrders || morningOrders + eveningOrders,
+    totalRevenue: providedTotalRevenue || morningRevenue + eveningRevenue,
     sourceFileId,
     createdAt,
     ocrConfidence: Object.keys(fieldWarnings).length ? 85 : 100,
@@ -916,8 +967,8 @@ const salesPersonFromRow = (
     morningRevenue,
     eveningOrders,
     eveningRevenue,
-    totalOrders: morningOrders + eveningOrders,
-    totalRevenue: morningRevenue + eveningRevenue,
+    totalOrders: providedTotalOrders || morningOrders + eveningOrders,
+    totalRevenue: providedTotalRevenue || morningRevenue + eveningRevenue,
     sourceFileId,
     createdAt,
     ocrConfidence: Object.keys(fieldWarnings).length ? 85 : 100,

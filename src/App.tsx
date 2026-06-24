@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ElementType, ReactNode } from "react";
 import {
   Bar,
@@ -306,6 +306,9 @@ function UploadPage({
   const [uploadPassword, setUploadPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("اكتبي باسورد الرفع للمتابعة.");
   const [salesExcelFile, setSalesExcelFile] = useState<File | null>(null);
+  const [salesExcelUploadedAt, setSalesExcelUploadedAt] = useState("");
+  const [salesExcelStatus, setSalesExcelStatus] = useState<"idle" | "uploaded" | "previewed" | "saved">("idle");
+  const [salesPreviewVisible, setSalesPreviewVisible] = useState(true);
   const [salesImageFile, setSalesImageFile] = useState<File | null>(null);
   const [salesDate, setSalesDate] = useState(today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
@@ -315,6 +318,7 @@ function UploadPage({
   const [ocrProgress, setOcrProgress] = useState("");
   const [ocrText, setOcrText] = useState("");
   const [ocrDebugImages, setOcrDebugImages] = useState<string[]>([]);
+  const salesExcelInputRef = useRef<HTMLInputElement | null>(null);
 
   const resetSalesPreview = () => {
     setPeoplePreview([]);
@@ -328,8 +332,14 @@ function UploadPage({
 
   const handleSalesExcelFile = (file: File | null) => {
     setSalesExcelFile(file);
+    setSalesExcelUploadedAt(file ? new Date().toISOString() : "");
+    setSalesExcelStatus(file ? "uploaded" : "idle");
+    setSalesPreviewVisible(false);
     resetSalesPreview();
-    if (file) setSalesDate(inferDateFromFileName(file.name));
+    if (file) {
+      setSalesDate(inferDateFromFileName(file.name));
+      setOcrProgress("File uploaded successfully. اضغطي Preview لمراجعة البيانات قبل الحفظ.");
+    }
   };
 
   const handleSalesImageFile = (file: File | null) => {
@@ -388,9 +398,11 @@ function UploadPage({
       setOcrText("");
       setOcrProgress(
         parsed.people.length || parsed.platforms.length
-          ? "تمت قراءة ملف المبيعات. راجعي الجدول وعدلي أي خلية قبل Save Final Data."
-          : "لم يتم العثور على شيتات pages_sales أو salespeople_sales. تم فتح قالب يدوي لليوم المختار."
+          ? "Preview ready. تمت قراءة ملف المبيعات. راجعي الجدول وعدلي أي خلية قبل Save Final Data."
+          : "Preview ready. لم يتم العثور على شيتات pages_sales أو salespeople_sales. تم فتح قالب يدوي لليوم المختار."
       );
+      setSalesExcelStatus("previewed");
+      setSalesPreviewVisible(true);
     } catch (error) {
       setOcrProgress(error instanceof Error ? error.message : "تعذر قراءة ملف المبيعات");
     }
@@ -441,6 +453,12 @@ function UploadPage({
       setOcrProgress("تم إلغاء الحفظ، لم يتم استبدال بيانات اليوم.");
       return;
     }
+    const totalMismatches = [...peoplePreview, ...platformPreview].filter(hasSalesTotalMismatch);
+    if (totalMismatches.length) {
+      setOcrProgress("لا يمكن الحفظ: فيه صفوف إجماليها لا يساوي صباحي + مسائي. صححي الصفوف المظللة بالأحمر الأول.");
+      setSalesPreviewVisible(true);
+      return;
+    }
     const normalizedPeople = peoplePreview.map((row) => normalizePerson({ ...row, reportDate: salesDate, sourceFileId }));
     const normalizedPlatforms = platformPreview.map((row) => normalizePlatform({ ...row, reportDate: salesDate, sourceFileId }));
     const hasSalesValues = [...normalizedPeople, ...normalizedPlatforms].some((row) => row.totalOrders > 0 || row.totalRevenue > 0);
@@ -476,7 +494,9 @@ function UploadPage({
     setOcrProgress("جاري حفظ تقرير المبيعات على Supabase...");
     await commitData(next);
     setRange({ from: salesDate, to: salesDate });
-    setOcrProgress("تم حفظ تقرير المبيعات وتحديث اللوحة.");
+    setOcrProgress("Final data saved. تم حفظ تقرير المبيعات وتحديث اللوحة.");
+    setSalesExcelStatus("saved");
+    setSalesPreviewVisible(true);
   };
 
   const replaceExistingDateData = async () => {
@@ -506,6 +526,24 @@ function UploadPage({
     const learnedData = buildOcrLearningData(data, originalPeoplePreview, normalizedPeople, originalPlatformPreview, normalizedPlatforms);
     await commitData(learnedData);
     setOcrProgress("تم حفظ التصحيحات فقط. الرفعات القادمة هتستخدم نفس التصحيحات تلقائيًا.");
+  };
+
+  const replaceSalesExcelFile = () => {
+    setSalesExcelFile(null);
+    setSalesExcelUploadedAt("");
+    setSalesExcelStatus("idle");
+    resetSalesPreview();
+    setSalesPreviewVisible(false);
+    window.setTimeout(() => salesExcelInputRef.current?.click(), 0);
+  };
+
+  const deleteSalesExcelFile = () => {
+    setSalesExcelFile(null);
+    setSalesExcelUploadedAt("");
+    setSalesExcelStatus("idle");
+    resetSalesPreview();
+    setSalesPreviewVisible(false);
+    setOcrProgress("تم حذف الملف والمعاينة فقط. البيانات النهائية المحفوظة لم يتم حذفها.");
   };
 
   const selectSalesDay = (date: string) => {
@@ -560,10 +598,31 @@ function UploadPage({
             <p>المسار الأساسي الآن هو ملف .xlsx أو .xls أو .csv يحتوي pages_sales و salespeople_sales، ثم مراجعة يدوية قبل الحفظ.</p>
           </div>
         </div>
-        <div className="upload-box">
-          <input type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => handleSalesExcelFile(event.target.files?.[0] ?? null)} />
-          <span>{salesExcelFile ? salesExcelFile.name : "اختاري ملف المبيعات اليومي Excel أو CSV"}</span>
-        </div>
+        <input
+          ref={salesExcelInputRef}
+          className={salesExcelFile ? "hidden-file-input" : ""}
+          type="file"
+          accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onChange={(event) => handleSalesExcelFile(event.target.files?.[0] ?? null)}
+        />
+        {salesExcelFile ? (
+          <div className="file-status-card">
+            <div>
+              <strong>{salesExcelFile.name}</strong>
+              <small>{salesExcelUploadedAt ? new Date(salesExcelUploadedAt).toLocaleString("ar-EG") : ""}</small>
+            </div>
+            <Badge text={salesExcelStatusLabel(salesExcelStatus)} />
+            <div className="inline-actions">
+              <button disabled={!peoplePreview.length && !platformPreview.length} onClick={() => setSalesPreviewVisible(true)}>View Preview</button>
+              <button onClick={replaceSalesExcelFile}>Replace File</button>
+              <button onClick={deleteSalesExcelFile}>Delete File</button>
+            </div>
+          </div>
+        ) : (
+          <div className="upload-box" onClick={() => salesExcelInputRef.current?.click()}>
+            <span>اختاري ملف المبيعات اليومي Excel أو CSV</span>
+          </div>
+        )}
         <div className="form-row">
           <label>
             تاريخ التقرير
@@ -632,19 +691,21 @@ function UploadPage({
         <AdsFileManager data={data} commitData={commitData} reportDate={salesDate} setReportDate={setSalesDate} />
       </div>
 
-      <div className="panel wide">
-        <ManualSalesReviewTable
-          data={data}
-          reportDate={salesDate}
-          sourceFileId={sourceFileId}
-          peopleRows={peoplePreview}
-          platformRows={platformPreview}
-          originalPeopleRows={originalPeoplePreview}
-          originalPlatformRows={originalPlatformPreview}
-          setPeopleRows={setPeoplePreview}
-          setPlatformRows={setPlatformPreview}
-        />
-      </div>
+      {salesPreviewVisible && (peoplePreview.length > 0 || platformPreview.length > 0) && (
+        <div className="panel wide">
+          <ManualSalesReviewTable
+            data={data}
+            reportDate={salesDate}
+            sourceFileId={sourceFileId}
+            peopleRows={peoplePreview}
+            platformRows={platformPreview}
+            originalPeopleRows={originalPeoplePreview}
+            originalPlatformRows={originalPlatformPreview}
+            setPeopleRows={setPeoplePreview}
+            setPlatformRows={setPlatformPreview}
+          />
+        </div>
+      )}
     </section>
   );
 }
@@ -1581,7 +1642,7 @@ function ManualSalesReviewTable({
     setPeopleRows(
       peopleRows.map((row) =>
         row.id === id
-          ? normalizePerson({
+          ? applyPreviewValidation({
               ...row,
               [field]: numericField(field) ? Number(value) : value,
               ocrReviewStatus: "ok",
@@ -1596,7 +1657,7 @@ function ManualSalesReviewTable({
     setPlatformRows(
       platformRows.map((row) =>
         row.id === id
-          ? normalizePlatform({
+          ? applyPreviewValidation({
               ...row,
               [field]: numericField(field) ? Number(value) : value,
               ocrReviewStatus: "ok",
@@ -1663,8 +1724,8 @@ function ManualSalesReviewTable({
                 <td><input type="number" value={row.morningRevenue} onChange={(event) => updatePerson(row.id, "morningRevenue", event.target.value)} /></td>
                 <td><input type="number" value={row.eveningOrders} onChange={(event) => updatePerson(row.id, "eveningOrders", event.target.value)} /></td>
                 <td><input type="number" value={row.eveningRevenue} onChange={(event) => updatePerson(row.id, "eveningRevenue", event.target.value)} /></td>
-                <td>{integer(row.totalOrders)}</td>
-                <td>{money(row.totalRevenue)}</td>
+                <td><input type="number" value={row.totalOrders} onChange={(event) => updatePerson(row.id, "totalOrders", event.target.value)} /></td>
+                <td><input type="number" value={row.totalRevenue} onChange={(event) => updatePerson(row.id, "totalRevenue", event.target.value)} /></td>
                 <td><Badge text={reviewConfidenceLabel(row)} /></td>
                 <td><input value={row.ocrReviewNotes ?? ocrWarningMessages(row).join("، ")} onChange={(event) => updatePerson(row.id, "ocrReviewNotes", event.target.value)} /></td>
                 <td>
@@ -1685,8 +1746,8 @@ function ManualSalesReviewTable({
                 <td><input type="number" value={row.morningRevenue} onChange={(event) => updatePlatform(row.id, "morningRevenue", event.target.value)} /></td>
                 <td><input type="number" value={row.eveningOrders} onChange={(event) => updatePlatform(row.id, "eveningOrders", event.target.value)} /></td>
                 <td><input type="number" value={row.eveningRevenue} onChange={(event) => updatePlatform(row.id, "eveningRevenue", event.target.value)} /></td>
-                <td>{integer(row.totalOrders)}</td>
-                <td>{money(row.totalRevenue)}</td>
+                <td><input type="number" value={row.totalOrders} onChange={(event) => updatePlatform(row.id, "totalOrders", event.target.value)} /></td>
+                <td><input type="number" value={row.totalRevenue} onChange={(event) => updatePlatform(row.id, "totalRevenue", event.target.value)} /></td>
                 <td><Badge text={reviewConfidenceLabel(row)} /></td>
                 <td><input value={row.ocrReviewNotes ?? ocrWarningMessages(row).join("، ")} onChange={(event) => updatePlatform(row.id, "ocrReviewNotes", event.target.value)} /></td>
                 <td>
@@ -1879,13 +1940,41 @@ function Badge({ text }: { text: string }) {
   return <span className="badge">{text}</span>;
 }
 
+const salesExcelStatusLabel = (status: "idle" | "uploaded" | "previewed" | "saved") => {
+  if (status === "saved") return "Saved";
+  if (status === "previewed") return "Previewed";
+  if (status === "uploaded") return "Uploaded";
+  return "No File";
+};
+
 const cloneSalesRows = <T extends SalesBySalesperson | SalesByPlatform>(rows: T[]): T[] =>
   rows.map((row) => ({ ...row, ocrFieldWarnings: { ...(row.ocrFieldWarnings ?? {}) } }));
 
 const reviewRowClass = (row: SalesBySalesperson | SalesByPlatform) => {
-  if (row.ocrReviewStatus === "needs_review" || (row.ocrConfidence ?? 100) < 70) return "review-needs";
+  if (hasSalesTotalMismatch(row) || row.ocrReviewStatus === "needs_review" || (row.ocrConfidence ?? 100) < 70) return "review-needs";
   if (row.ocrReviewStatus === "auto_corrected") return "review-auto";
   return "";
+};
+
+const hasSalesTotalMismatch = (row: SalesBySalesperson | SalesByPlatform) =>
+  row.totalOrders !== row.morningOrders + row.eveningOrders ||
+  row.totalRevenue !== row.morningRevenue + row.eveningRevenue;
+
+const applyPreviewValidation = <T extends SalesBySalesperson | SalesByPlatform>(row: T): T => {
+  const warnings = { ...(row.ocrFieldWarnings ?? {}) };
+  delete warnings.totalOrders;
+  delete warnings.totalValue;
+  if (row.totalOrders !== row.morningOrders + row.eveningOrders) {
+    warnings.totalOrders = ["إجمالي الطلبات لا يساوي صباحي + مسائي"];
+  }
+  if (row.totalRevenue !== row.morningRevenue + row.eveningRevenue) {
+    warnings.totalValue = ["إجمالي القيمة لا يساوي صباحي + مسائي"];
+  }
+  return {
+    ...row,
+    ocrFieldWarnings: warnings,
+    ocrReviewStatus: Object.keys(warnings).length ? "needs_review" : row.ocrReviewStatus
+  };
 };
 
 const reviewConfidenceLabel = (row: SalesBySalesperson | SalesByPlatform) => {
