@@ -49,7 +49,7 @@ import {
   saveSalesUpload,
   subscribeToDataChanges
 } from "./lib/storage";
-import { createSampleSales, inferDateFromFileName, parseAdsWorkbook, parseSalesOcrText, runArabicOcr } from "./lib/parsing";
+import { createSampleSales, getLatestSalesOcrDebugImages, inferDateFromFileName, parseAdsWorkbook, parseSalesOcrText, runArabicOcr } from "./lib/parsing";
 
 const today = new Date().toISOString().slice(0, 10);
 const numberFormat = new Intl.NumberFormat("ar-EG");
@@ -265,6 +265,7 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
   const [platformPreview, setPlatformPreview] = useState<SalesByPlatform[]>([]);
   const [ocrProgress, setOcrProgress] = useState("");
   const [ocrText, setOcrText] = useState("");
+  const [ocrDebugImages, setOcrDebugImages] = useState<string[]>([]);
   const [salesMode, setSalesMode] = useState<UploadMode>("merge");
 
   const handleSalesFile = (file: File | null) => {
@@ -272,6 +273,7 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
     setPeoplePreview([]);
     setPlatformPreview([]);
     setOcrText("");
+    setOcrDebugImages([]);
     setOcrProgress("");
     if (file) setSalesDate(inferDateFromFileName(file.name));
   };
@@ -318,6 +320,7 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
       const platforms = parsed.platforms.length ? parsed.platforms : template.platforms;
       setPeoplePreview(people);
       setPlatformPreview(platforms);
+      setOcrDebugImages(getLatestSalesOcrDebugImages());
       setOcrProgress(
         parsed.people.length || parsed.platforms.length
           ? "تم استخراج أفضل قراءة ممكنة. راجعي الجدول وعدلي أي خلية قبل الحفظ."
@@ -333,6 +336,7 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
     const template = createManualSalesTemplate();
     setPeoplePreview(sample.people.length ? sample.people : template.people);
     setPlatformPreview(sample.platforms.length ? sample.platforms : template.platforms);
+    setOcrDebugImages([]);
     setOcrProgress(sample.people.length || sample.platforms.length ? "تم تحميل نموذج قابل للتعديل من شكل التقرير المرفق." : "تم تحميل قالب يدوي لليوم المختار.");
   };
 
@@ -456,6 +460,23 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
         </div>
         {ocrProgress && <p className="status-line">{ocrProgress}</p>}
       </div>
+
+      {ocrDebugImages.length > 0 && (
+        <div className="panel wide">
+          <div className="section-title">
+            <Search />
+            <div>
+              <h2>Debug OCR</h2>
+              <p>مستطيلات القص الفعلية فوق صورة التقرير. لو رقم ظهر غلط، راجعي مكان المستطيل وصورة الخلية في الجداول تحت.</p>
+            </div>
+          </div>
+          <div className="ocr-debug-overlays">
+            {ocrDebugImages.map((image, index) => (
+              <img key={`${image.slice(0, 32)}-${index}`} src={image} alt={`OCR crop overlay ${index + 1}`} />
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="panel">
         <div className="section-title">
@@ -1185,7 +1206,22 @@ function EditablePeopleTable({ rows, setRows }: { rows: SalesBySalesperson[]; se
               <td><input type="number" value={row.eveningOrders} onChange={(event) => update(row.id, "eveningOrders", event.target.value)} /></td>
               <td><input type="number" value={row.eveningRevenue} onChange={(event) => update(row.id, "eveningRevenue", event.target.value)} /></td>
               <td>{reviewTotal(row.totalRevenue, row.totalOrders)}</td>
-              <td className={warnings.length ? "ocr-warning-cell" : ""}>{row.ocrConfidence ? `${row.ocrConfidence}%` : "-"}{warnings.length ? <small>{warnings.join("، ")}</small> : null}</td>
+              <td className={warnings.length ? "ocr-warning-cell" : ""}>
+                <OcrDebugDetails
+                  row={row}
+                  fields={[
+                    ["name", "الاسم", row.salespersonName],
+                    ["code", "الكود", row.salespersonCode],
+                    ["morningOrders", "طلبات صباحي", row.morningOrders],
+                    ["morningRevenue", "قيمة صباحي", row.morningRevenue],
+                    ["eveningOrders", "طلبات مسائي", row.eveningOrders],
+                    ["eveningRevenue", "قيمة مسائي", row.eveningRevenue],
+                    ["reportTotalOrders", "إجمالي الطلبات OCR", row.totalOrders],
+                    ["reportTotalRevenue", "إجمالي القيمة OCR", row.totalRevenue]
+                  ]}
+                />
+                {warnings.length ? <small>{warnings.join("، ")}</small> : null}
+              </td>
             </tr>
             );
           })}
@@ -1226,13 +1262,53 @@ function EditablePlatformTable({ rows, setRows }: { rows: SalesByPlatform[]; set
               <td><input type="number" value={row.eveningOrders} onChange={(event) => update(row.id, "eveningOrders", event.target.value)} /></td>
               <td><input type="number" value={row.eveningRevenue} onChange={(event) => update(row.id, "eveningRevenue", event.target.value)} /></td>
               <td>{reviewTotal(row.totalRevenue, row.totalOrders)}</td>
-              <td className={warnings.length ? "ocr-warning-cell" : ""}>{row.ocrConfidence ? `${row.ocrConfidence}%` : "-"}{warnings.length ? <small>{warnings.join("، ")}</small> : null}</td>
+              <td className={warnings.length ? "ocr-warning-cell" : ""}>
+                <OcrDebugDetails
+                  row={row}
+                  fields={[
+                    ["name", "الصفحة", row.platformName],
+                    ["morningOrders", "طلبات صباحي", row.morningOrders],
+                    ["morningRevenue", "قيمة صباحي", row.morningRevenue],
+                    ["eveningOrders", "طلبات مسائي", row.eveningOrders],
+                    ["eveningRevenue", "قيمة مسائي", row.eveningRevenue],
+                    ["reportTotalOrders", "إجمالي الطلبات OCR", row.totalOrders],
+                    ["reportTotalRevenue", "إجمالي القيمة OCR", row.totalRevenue]
+                  ]}
+                />
+                {warnings.length ? <small>{warnings.join("، ")}</small> : null}
+              </td>
             </tr>
             );
           })}
         </tbody>
       </table>
     </div>
+  );
+}
+
+function OcrDebugDetails({
+  row,
+  fields
+}: {
+  row: SalesBySalesperson | SalesByPlatform;
+  fields: Array<[string, string, string | number]>;
+}) {
+  const hasImages = fields.some(([key]) => row.ocrCellImages?.[key]);
+  if (!row.ocrConfidence && !hasImages) return <>-</>;
+  return (
+    <details className="ocr-debug-details">
+      <summary>{row.ocrConfidence ? `${row.ocrConfidence}%` : "OCR"}</summary>
+      <div className="ocr-cell-grid">
+        {fields.map(([key, label, value]) => (
+          <div className="ocr-cell-card" key={key}>
+            {row.ocrCellImages?.[key] ? <img src={row.ocrCellImages[key]} alt="" /> : <span className="ocr-empty-image">لا توجد صورة</span>}
+            <strong>{label}</strong>
+            <span>{String(value)}</span>
+            <small>{row.ocrFieldConfidence?.[key] ? `${row.ocrFieldConfidence[key]}%` : "بدون ثقة"}</small>
+          </div>
+        ))}
+      </div>
+    </details>
   );
 }
 

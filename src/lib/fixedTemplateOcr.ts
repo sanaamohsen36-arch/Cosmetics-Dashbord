@@ -30,6 +30,7 @@ export interface FixedTemplateRow {
 export interface FixedTemplateData {
   people: FixedTemplateRow[];
   platforms: FixedTemplateRow[];
+  debugImages: string[];
 }
 
 interface OcrCell {
@@ -37,6 +38,7 @@ interface OcrCell {
   confidence: number;
   image: string;
   hadLetters: boolean;
+  pass: "normal" | "tight" | "wide";
 }
 
 interface CropRange {
@@ -44,6 +46,25 @@ interface CropRange {
   x2: number;
   y1: number;
   y2: number;
+}
+
+interface RowRange {
+  y1: number;
+  y2: number;
+}
+
+interface RowDetectionOptions {
+  x1: number;
+  x2: number;
+  y1: number;
+  y2: number;
+  contentY1: number;
+  contentY2: number;
+  fallbackFirstRowTop: number;
+  fallbackRowHeight: number;
+  fallbackRowCount: number;
+  minRows: number;
+  maxRows: number;
 }
 
 const platformColumns: Record<CellKey, [number, number]> = {
@@ -91,41 +112,69 @@ export const extractFixedTemplateSales = async (
   onProgress("تجهيز الصورة بنظام fixed template", 5);
   const canvas = await preprocessReportImage(file);
 
-  onProgress("قراءة خلايا الصفحات", 18);
+  onProgress("اكتشاف خطوط جدول التقرير", 12);
+  const platformRows = detectRowRanges(canvas, {
+    x1: 0,
+    x2: 0.477,
+    y1: 0.145,
+    y2: 0.56,
+    contentY1: 0.19,
+    contentY2: 0.535,
+    fallbackFirstRowTop: 0.195,
+    fallbackRowHeight: 0.0355,
+    fallbackRowCount: 10,
+    minRows: 6,
+    maxRows: 12
+  });
+  const salesRows = detectRowRanges(canvas, {
+    x1: 0.478,
+    x2: 0.982,
+    y1: 0.08,
+    y2: 0.965,
+    contentY1: 0.125,
+    contentY2: 0.945,
+    fallbackFirstRowTop: 0.132,
+    fallbackRowHeight: 0.0329,
+    fallbackRowCount: 28,
+    minRows: 18,
+    maxRows: 32
+  });
+
+  const debugImages = [
+    drawDebugOverlay(canvas, platformRows, platformColumns, "جدول الصفحات"),
+    drawDebugOverlay(canvas, salesRows, salesColumns, "جدول السيلز")
+  ];
+
+  onProgress("قراءة خلايا الصفحات", 22);
   const platforms = await extractRows(canvas, platformColumns, {
-    firstRowTop: 0.195,
-    rowHeight: 0.0355,
-    rowCount: 10,
+    rows: platformRows,
     kind: "platform"
   });
 
-  onProgress("قراءة خلايا السيلز", 55);
+  onProgress("قراءة خلايا السيلز", 58);
   const people = await extractRows(canvas, salesColumns, {
-    firstRowTop: 0.132,
-    rowHeight: 0.0329,
-    rowCount: 28,
+    rows: salesRows,
     kind: "sales"
   });
 
   return {
     people: people.filter((row) => row.name && row.code && !isHeaderOrTotal(row.name) && (row.totalOrders || row.totalRevenue)),
-    platforms: platforms.filter((row) => row.name && !isHeaderOrTotal(row.name) && (row.totalOrders || row.totalRevenue))
+    platforms: platforms.filter((row) => row.name && !isHeaderOrTotal(row.name) && (row.totalOrders || row.totalRevenue)),
+    debugImages
   };
 };
 
 const extractRows = async (
   canvas: HTMLCanvasElement,
   columns: Record<CellKey, [number, number]>,
-  options: { firstRowTop: number; rowHeight: number; rowCount: number; kind: "sales" | "platform" }
+  options: { rows: RowRange[]; kind: "sales" | "platform" }
 ) => {
   const rows: FixedTemplateRow[] = [];
-  for (let rowIndex = 0; rowIndex < options.rowCount; rowIndex += 1) {
-    const y1 = options.firstRowTop + rowIndex * options.rowHeight;
-    const y2 = y1 + options.rowHeight;
+  for (const rowRange of options.rows) {
     const read = async (field: CellKey, numeric: boolean) => {
       const [x1, x2] = columns[field];
-      if (x1 === x2) return { text: "", confidence: 100, image: "", hadLetters: false };
-      return recognizeCell(canvas, { x1, x2, y1, y2 }, numeric);
+      if (x1 === x2) return { text: "", confidence: 100, image: "", hadLetters: false, pass: "normal" as const };
+      return recognizeCellWithRetry(canvas, { x1, x2, y1: rowRange.y1, y2: rowRange.y2 }, numeric, field);
     };
 
     const nameCell = await read("name", false);
@@ -159,6 +208,7 @@ const extractRows = async (
     };
 
     reconcileWithOcrTotal(values, warnings);
+    validateCalculatedTotals(values, warnings);
 
     const totalOrders = values.morningOrders + values.eveningOrders;
     const totalRevenue = values.morningRevenue + values.eveningRevenue;
@@ -186,6 +236,8 @@ const extractRows = async (
         morningRevenue: morningRevenue.image,
         eveningOrders: eveningOrders.image,
         eveningRevenue: eveningRevenue.image,
+        reportTotalOrders: reportTotalOrders.image,
+        reportTotalRevenue: reportTotalRevenue.image,
         total: reportTotalRevenue.image || reportTotalOrders.image
       },
       isSubtotal: isSubtotalName(name)
@@ -194,8 +246,39 @@ const extractRows = async (
   return rows;
 };
 
-const recognizeCell = async (canvas: HTMLCanvasElement, range: CropRange, numeric: boolean): Promise<OcrCell> => {
-  const crop = cropCanvas(canvas, range, numeric);
+const recognizeCellWithRetry = async (
+  canvas: HTMLCanvasElement,
+  range: CropRange,
+  numeric: boolean,
+  field: CellKey
+): Promise<OcrCell> => {
+  const first = await recognizeCell(canvas, range, numeric, "normal");
+  if (!numeric) return first.confidence < 65 ? chooseBestCell(first, await recognizeCell(canvas, range, numeric, "wide"), field) : first;
+
+  const digits = onlyDigits(first.text);
+  const looksSuspicious =
+    first.confidence < 78 ||
+    first.hadLetters ||
+    !digits ||
+    (field.toLowerCase().includes("orders") && digits.length > 2) ||
+    (field.toLowerCase().includes("revenue") && digits.length > 7);
+
+  if (!looksSuspicious) return first;
+
+  const tight = await recognizeCell(canvas, range, numeric, "tight");
+  const best = chooseBestCell(first, tight, field);
+  if (best.confidence >= 78 && onlyDigits(best.text)) return best;
+
+  return chooseBestCell(best, await recognizeCell(canvas, range, numeric, "wide"), field);
+};
+
+const recognizeCell = async (
+  canvas: HTMLCanvasElement,
+  range: CropRange,
+  numeric: boolean,
+  pass: "normal" | "tight" | "wide"
+): Promise<OcrCell> => {
+  const crop = cropCanvas(canvas, range, numeric, pass);
   const image = crop.toDataURL("image/png");
   const blob = await canvasToBlob(crop);
   const result = await Tesseract.recognize(blob, numeric ? "eng" : "ara+eng", {
@@ -207,7 +290,8 @@ const recognizeCell = async (canvas: HTMLCanvasElement, range: CropRange, numeri
     text,
     confidence: Math.round(result.data.confidence || 0),
     image,
-    hadLetters: numeric && /[A-Za-z\u0600-\u06ff]/.test(text)
+    hadLetters: numeric && /[A-Za-z\u0600-\u06ff]/.test(text),
+    pass
   };
 };
 
@@ -241,9 +325,146 @@ const preprocessReportImage = async (file: File) => {
   return deskewCanvas(canvas);
 };
 
-const cropCanvas = (source: HTMLCanvasElement, range: CropRange, numeric: boolean) => {
-  const padX = numeric ? 0.004 : 0.002;
-  const padY = 0.004;
+const chooseBestCell = (left: OcrCell, right: OcrCell, field: CellKey): OcrCell => {
+  if (!right.text && left.text) return left;
+  if (!left.text && right.text) return right;
+
+  const leftDigits = onlyDigits(left.text);
+  const rightDigits = onlyDigits(right.text);
+  const isOrderField = field.toLowerCase().includes("orders");
+
+  if (isOrderField && leftDigits.length > 2 && rightDigits.length <= 2 && rightDigits) return right;
+  if (isOrderField && rightDigits.length > 2 && leftDigits.length <= 2 && leftDigits) return left;
+  if (left.hadLetters && !right.hadLetters) return right;
+  if (right.hadLetters && !left.hadLetters) return left;
+
+  return right.confidence > left.confidence ? right : left;
+};
+
+const detectRowRanges = (canvas: HTMLCanvasElement, options: RowDetectionOptions): RowRange[] => {
+  const lineCenters = detectHorizontalLineCenters(canvas, options);
+  const rows: RowRange[] = [];
+  const minHeight = canvas.height * 0.012;
+  const maxHeight = canvas.height * 0.06;
+
+  for (let index = 0; index < lineCenters.length - 1; index += 1) {
+    const top = lineCenters[index];
+    const bottom = lineCenters[index + 1];
+    const height = bottom - top;
+    const centerRatio = ((top + bottom) / 2) / canvas.height;
+    if (height < minHeight || height > maxHeight) continue;
+    if (centerRatio < options.contentY1 || centerRatio > options.contentY2) continue;
+    rows.push({
+      y1: Math.max(0, (top + Math.max(2, height * 0.06)) / canvas.height),
+      y2: Math.min(1, (bottom - Math.max(2, height * 0.06)) / canvas.height)
+    });
+  }
+
+  const cleaned = removeDuplicateRows(rows).slice(0, options.maxRows);
+  if (cleaned.length >= options.minRows) return cleaned;
+  return fallbackRows(options);
+};
+
+const detectHorizontalLineCenters = (canvas: HTMLCanvasElement, options: RowDetectionOptions) => {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return [];
+  const x = Math.round(options.x1 * canvas.width);
+  const y = Math.round(options.y1 * canvas.height);
+  const width = Math.max(1, Math.round((options.x2 - options.x1) * canvas.width));
+  const height = Math.max(1, Math.round((options.y2 - options.y1) * canvas.height));
+  const imageData = context.getImageData(x, y, width, height);
+  const scores: number[] = [];
+
+  for (let row = 0; row < height; row += 1) {
+    let dark = 0;
+    for (let col = 0; col < width; col += 1) {
+      const offset = (row * width + col) * 4;
+      if (imageData.data[offset] < 150) dark += 1;
+    }
+    scores.push(dark / width);
+  }
+
+  const threshold = Math.max(0.18, percentile(scores, 0.93));
+  const candidateRows: number[] = [];
+  scores.forEach((value, index) => {
+    if (value >= threshold) candidateRows.push(y + index);
+  });
+
+  return groupLineCandidates(candidateRows);
+};
+
+const groupLineCandidates = (rows: number[]) => {
+  if (!rows.length) return [];
+  const groups: number[][] = [[rows[0]]];
+  for (let index = 1; index < rows.length; index += 1) {
+    const current = rows[index];
+    const lastGroup = groups[groups.length - 1];
+    if (current - lastGroup[lastGroup.length - 1] <= 4) {
+      lastGroup.push(current);
+    } else {
+      groups.push([current]);
+    }
+  }
+  return groups.map((group) => Math.round(group.reduce((total, value) => total + value, 0) / group.length));
+};
+
+const removeDuplicateRows = (rows: RowRange[]) => {
+  const result: RowRange[] = [];
+  for (const row of rows) {
+    const last = result[result.length - 1];
+    if (last && Math.abs(row.y1 - last.y1) < 0.006) continue;
+    result.push(row);
+  }
+  return result;
+};
+
+const fallbackRows = (options: RowDetectionOptions) =>
+  Array.from({ length: options.fallbackRowCount }, (_, index) => {
+    const y1 = options.fallbackFirstRowTop + index * options.fallbackRowHeight;
+    return { y1, y2: y1 + options.fallbackRowHeight };
+  });
+
+const percentile = (values: number[], ratio: number) => {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * ratio)))] ?? 0;
+};
+
+const drawDebugOverlay = (source: HTMLCanvasElement, rows: RowRange[], columns: Record<CellKey, [number, number]>, title: string) => {
+  const maxWidth = 1400;
+  const scale = Math.min(1, maxWidth / source.width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(source.width * scale);
+  canvas.height = Math.round(source.height * scale);
+  const context = canvas.getContext("2d");
+  if (!context) return "";
+  context.drawImage(source, 0, 0, canvas.width, canvas.height);
+  context.lineWidth = Math.max(1, 2 * scale);
+  context.font = `${Math.max(12, 18 * scale)}px sans-serif`;
+  context.fillStyle = "rgba(14, 165, 233, 0.9)";
+  context.fillText(title, 12, 24);
+
+  rows.forEach((row, rowIndex) => {
+    Object.entries(columns).forEach(([field, [x1, x2]]) => {
+      if (x1 === x2) return;
+      const x = x1 * canvas.width;
+      const y = row.y1 * canvas.height;
+      const width = (x2 - x1) * canvas.width;
+      const height = (row.y2 - row.y1) * canvas.height;
+      context.strokeStyle = field.includes("Orders") ? "rgba(34, 197, 94, 0.95)" : "rgba(14, 165, 233, 0.85)";
+      context.strokeRect(x, y, width, height);
+      if (field === "name") {
+        context.fillStyle = "rgba(14, 165, 233, 0.9)";
+        context.fillText(String(rowIndex + 1), x + 4, y + 16);
+      }
+    });
+  });
+
+  return canvas.toDataURL("image/png");
+};
+
+const cropCanvas = (source: HTMLCanvasElement, range: CropRange, numeric: boolean, pass: "normal" | "tight" | "wide") => {
+  const padX = pass === "tight" ? 0.001 : pass === "wide" ? 0.006 : numeric ? 0.002 : 0.002;
+  const padY = pass === "tight" ? 0.001 : pass === "wide" ? 0.006 : 0.002;
   const x = Math.max(0, Math.floor((range.x1 - padX) * source.width));
   const y = Math.max(0, Math.floor((range.y1 - padY) * source.height));
   const width = Math.min(source.width - x, Math.ceil((range.x2 - range.x1 + padX * 2) * source.width));
@@ -300,7 +521,30 @@ const numericValue = (cell: OcrCell, field: string, warnings: OcrFieldWarnings) 
   if (cell.hadLetters) addWarning(warnings, field, "الخلية الرقمية احتوت حروف وتم رفضها");
   const value = Number(onlyDigits(cell.text));
   if (cell.text && cell.confidence < 72) addWarning(warnings, field, "ثقة الرقم منخفضة");
+  if (field.toLowerCase().includes("orders") && value > 99) addWarning(warnings, field, "رقم الطلبات غير منطقي ومحتاج مراجعة");
+  if (field.toLowerCase().includes("revenue") && value > 999999) addWarning(warnings, field, "قيمة الأوردر غير منطقية ومحتاجة مراجعة");
   return Number.isFinite(value) ? value : 0;
+};
+
+const validateCalculatedTotals = (
+  values: {
+    morningOrders: number;
+    morningRevenue: number;
+    eveningOrders: number;
+    eveningRevenue: number;
+    reportTotalOrders: number;
+    reportTotalRevenue: number;
+  },
+  warnings: OcrFieldWarnings
+) => {
+  const calculatedOrders = values.morningOrders + values.eveningOrders;
+  const calculatedRevenue = values.morningRevenue + values.eveningRevenue;
+  if (values.reportTotalOrders > 0 && calculatedOrders !== values.reportTotalOrders) {
+    addWarning(warnings, "reportTotalOrders", "إجمالي الطلبات لا يساوي صباحي + مسائي ومحتاج مراجعة");
+  }
+  if (values.reportTotalRevenue > 0 && calculatedRevenue !== values.reportTotalRevenue) {
+    addWarning(warnings, "reportTotalRevenue", "إجمالي القيمة لا يساوي صباحي + مسائي ومحتاج مراجعة");
+  }
 };
 
 const normalizePageName = (value: string, warnings: OcrFieldWarnings) => {

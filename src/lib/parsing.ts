@@ -103,10 +103,14 @@ const cleanText = (value: string) =>
     .trim();
 
 let latestSalesOcrResult: SalesOcrResult = { text: "", words: [] };
+let latestSalesOcrDebugImages: string[] = [];
+
+export const getLatestSalesOcrDebugImages = () => latestSalesOcrDebugImages;
 
 export const runArabicOcr = async (file: File, onProgress: (message: string, progress: number) => void) => {
   const fixedTemplate = await extractFixedTemplateSales(file, onProgress);
   if (fixedTemplate && (fixedTemplate.people.length || fixedTemplate.platforms.length)) {
+    latestSalesOcrDebugImages = fixedTemplate.debugImages;
     latestSalesOcrResult = { text: "fixed-template", words: [], fixedTemplate };
     onProgress("تمت قراءة الخلايا بنظام fixed template", 100);
     return latestSalesOcrResult.text;
@@ -136,6 +140,7 @@ export const runArabicOcr = async (file: File, onProgress: (message: string, pro
         confidence: Number(word.confidence ?? 100)
       }))
   };
+  latestSalesOcrDebugImages = [];
   return latestSalesOcrResult.text;
 };
 
