@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import Tesseract from "tesseract.js";
-import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson } from "../types";
+import type { AdsPlatform, AdsRow, OcrFieldWarnings, SalesByPlatform, SalesBySalesperson } from "../types";
+import { isSubtotalPlatformName } from "./metrics";
 import { createId } from "./storage";
 
 const currentYear = new Date().getFullYear();
@@ -11,6 +12,7 @@ export interface OcrWord {
   y0: number;
   x1: number;
   y1: number;
+  confidence: number;
 }
 
 export interface SalesOcrResult {
@@ -27,7 +29,32 @@ interface ParsedNumericCells {
   reportTotalRevenue: number;
 }
 
-type NumericColumnMap = Record<keyof ParsedNumericCells, [number, number]>;
+type NumericField = keyof ParsedNumericCells;
+type NumericColumnMap = Record<NumericField, [number, number]>;
+type ParsedNumericResult = ParsedNumericCells & {
+  fieldConfidence: Record<string, number>;
+  fieldWarnings: OcrFieldWarnings;
+};
+
+interface NumericCellDetail {
+  raw: string;
+  normalized: string;
+  value: number;
+  confidence: number;
+}
+
+const pageNameDictionary = [
+  { canonical: "ريجينكس", aliases: ["ريجينكس", "regenix"] },
+  { canonical: "ريجينكس eg", aliases: ["ريجينكس eg", "regenix eg", "regenix eg", "eg"] },
+  { canonical: "واتس اب ريجينكس", aliases: ["واتس اب ريجينكس", "واتساب ريجينكس", "whatsapp regenix"] },
+  { canonical: "واتساب نيو", aliases: ["واتساب نيو", "واتس اب نيو", "whatsapp new"] },
+  { canonical: "واتساب تيك توك", aliases: ["واتساب تيك توك", "واتس اب تيك توك", "whatsapp tiktok"] },
+  { canonical: "Website CELIXI", aliases: ["website celixi", "web site celixi", "celixi", "ويب سايت celixi", "ويب سايت"] },
+  { canonical: "Instagram", aliases: ["instagram", "انستجرام", "انستغرام"] },
+  { canonical: "Follow-up", aliases: ["follow-up", "follow up", "المتابعة", "المتابعه"] },
+  { canonical: "Follow-up Team", aliases: ["follow-up team", "follow up team", "تيم المتابعة", "تيم المتابعه"] },
+  { canonical: "TV Ad", aliases: ["tv ad", "تليفون إعلان", "تليفون اعلان", "تليفون اعلانات"] }
+];
 
 export const inferDateFromFileName = (fileName: string): string => {
   const normalized = fileName.replace(/[_.]/g, "-");
@@ -51,14 +78,21 @@ const toISODate = (year: number, month: number, day: number) => {
 
 const toNumber = (value: unknown): number => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  const text = String(value ?? "")
-    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
-    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
-    .replace(/[٬,]/g, "")
+  const text = normalizeNumericText(String(value ?? ""))
     .replace(/[^\d.-]/g, "");
   const number = Number(text);
   return Number.isFinite(number) ? number : 0;
 };
+
+const normalizeNumericText = (value: string) =>
+  value
+    .replace(/[٠-٩]/g, (digit) => String("٠١٢٣٤٥٦٧٨٩".indexOf(digit)))
+    .replace(/[۰-۹]/g, (digit) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(digit)))
+    .replace(/[OoQD]/g, "0")
+    .replace(/[lI|]/g, "1")
+    .replace(/[٬,]/g, "")
+    .replace(/\s+/g, "")
+    .trim();
 
 const cleanText = (value: string) =>
   value
@@ -69,12 +103,17 @@ const cleanText = (value: string) =>
 let latestSalesOcrResult: SalesOcrResult = { text: "", words: [] };
 
 export const runArabicOcr = async (file: File, onProgress: (message: string, progress: number) => void) => {
-  const result = await Tesseract.recognize(file, "ara+eng", {
+  onProgress("تحسين الصورة قبل OCR", 5);
+  const imageForOcr = await preprocessImageForOcr(file);
+  const result = await Tesseract.recognize(imageForOcr, "ara+eng", {
     logger: (event) => {
       if (event.status) onProgress(event.status, Math.round((event.progress || 0) * 100));
     }
   });
-  const data = result.data as unknown as { text?: string; words?: Array<{ text?: string; bbox?: { x0: number; y0: number; x1: number; y1: number } }> };
+  const data = result.data as unknown as {
+    text?: string;
+    words?: Array<{ text?: string; confidence?: number; bbox?: { x0: number; y0: number; x1: number; y1: number } }>;
+  };
   latestSalesOcrResult = {
     text: data.text ?? "",
     words: (data.words ?? [])
@@ -84,11 +123,61 @@ export const runArabicOcr = async (file: File, onProgress: (message: string, pro
         x0: word.bbox?.x0 ?? 0,
         y0: word.bbox?.y0 ?? 0,
         x1: word.bbox?.x1 ?? 0,
-        y1: word.bbox?.y1 ?? 0
+        y1: word.bbox?.y1 ?? 0,
+        confidence: Number(word.confidence ?? 100)
       }))
   };
   return latestSalesOcrResult.text;
 };
+
+const preprocessImageForOcr = async (file: File): Promise<Blob | File> => {
+  if (!file.type.startsWith("image/")) return file;
+
+  const image = await loadImage(file);
+  const scale = Math.min(3, Math.max(1.8, 2600 / Math.max(image.naturalWidth || image.width, 1)));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round((image.naturalWidth || image.width) * scale);
+  canvas.height = Math.round((image.naturalHeight || image.height) * scale);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) return file;
+
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const data = imageData.data;
+  for (let index = 0; index < data.length; index += 4) {
+    const gray = data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114;
+    const contrasted = Math.max(0, Math.min(255, (gray - 128) * 1.35 + 128));
+    const value = contrasted > 235 ? 255 : contrasted < 80 ? 0 : contrasted;
+    data[index] = value;
+    data[index + 1] = value;
+    data[index + 2] = value;
+  }
+  context.putImageData(imageData, 0, 0);
+
+  return new Promise((resolve) => {
+    canvas.toBlob((blob) => resolve(blob ?? file), "image/png", 1);
+  });
+};
+
+const loadImage = (file: File) =>
+  new Promise<HTMLImageElement>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("تعذر تجهيز الصورة للقراءة"));
+    };
+    image.src = url;
+  });
 
 export const parseSalesOcrText = (
   ocr: SalesOcrResult | string,
@@ -103,12 +192,12 @@ export const parseSalesOcrText = (
   const platforms = parsePlatformGrid(words, bounds, reportDate, sourceFileId, now);
   const fallback = createKnownReportFallback(reportDate, sourceFileId);
 
-  if (fallback && shouldUseKnownReportFallback(people, platforms, fallback)) {
+  if (fallback && (fallback.people.length || fallback.platforms.length) && shouldUseKnownReportFallback(people, platforms, fallback)) {
     return fallback;
   }
 
   if (!isReliableSalesParse(people, platforms)) {
-    console.warn("OCR table parse rejected because quality is too low", {
+    console.warn("OCR table parse has low confidence; returning editable preview", {
       reportDate,
       peopleRows: people.length,
       platformRows: platforms.length,
@@ -124,11 +213,51 @@ export const parseSalesOcrText = (
         revenue: row.totalRevenue
       }))
     });
-    return { people: [], platforms: [] };
+    if (!people.length && !platforms.length) {
+      return createEmptyEditableSalesPreview(reportDate, sourceFileId, now);
+    }
   }
 
   return { people, platforms };
 };
+
+const createEmptyEditableSalesPreview = (
+  reportDate: string,
+  sourceFileId: string,
+  createdAt: string
+): { people: SalesBySalesperson[]; platforms: SalesByPlatform[] } => ({
+  people: [
+    {
+      id: createId(),
+      reportDate,
+      salespersonName: "",
+      salespersonCode: "",
+      morningOrders: 0,
+      morningRevenue: 0,
+      eveningOrders: 0,
+      eveningRevenue: 0,
+      totalOrders: 0,
+      totalRevenue: 0,
+      sourceFileId,
+      createdAt
+    }
+  ],
+  platforms: ["ريجينكس eg", "واتس اب ريجينكس", "ريجينكس", "تليفون إعلان", "تيم المتابعة", "المتابعة"].map(
+    (platformName) => ({
+      id: createId(),
+      reportDate,
+      platformName,
+      morningOrders: 0,
+      morningRevenue: 0,
+      eveningOrders: 0,
+      eveningRevenue: 0,
+      totalOrders: 0,
+      totalRevenue: 0,
+      sourceFileId,
+      createdAt
+    })
+  )
+});
 
 const getWordBounds = (words: OcrWord[]) => ({
   width: Math.max(...words.map((word) => word.x1), 1),
@@ -162,6 +291,11 @@ const parseSalespersonGrid = (
       const { morningOrders, morningRevenue, eveningOrders, eveningRevenue } = parsedCells;
       const totalOrders = morningOrders + eveningOrders;
       const totalRevenue = morningRevenue + eveningRevenue;
+      const fieldConfidence = {
+        ...parsedCells.fieldConfidence,
+        salespersonName: cellConfidence(rowWords, bounds.width, columns.name),
+        salespersonCode: cellConfidence(rowWords, bounds.width, columns.code)
+      };
 
       validateReportTotals("salesperson", salespersonName, parsedCells, totalOrders, totalRevenue);
 
@@ -177,7 +311,10 @@ const parseSalespersonGrid = (
         totalOrders,
         totalRevenue,
         sourceFileId,
-        createdAt
+        createdAt,
+        ocrConfidence: averageConfidence(fieldConfidence),
+        ocrFieldConfidence: fieldConfidence,
+        ocrFieldWarnings: parsedCells.fieldWarnings
       };
     })
     .filter((row) => isValidSalespersonRow(row.salespersonName, row.salespersonCode, row.totalOrders, row.totalRevenue));
@@ -203,11 +340,20 @@ const parsePlatformGrid = (
 
   return rows
     .map((rowWords) => {
-      const platformName = cellText(rowWords, bounds.width, columns.name);
+      const rawPlatformName = cellText(rowWords, bounds.width, columns.name);
+      const platformName = normalizePlatformDisplayName(rawPlatformName);
       const parsedCells = parseNumericCells(rowWords, bounds.width, columns);
       const { morningOrders, morningRevenue, eveningOrders, eveningRevenue } = parsedCells;
       const totalOrders = morningOrders + eveningOrders;
       const totalRevenue = morningRevenue + eveningRevenue;
+      const fieldWarnings = { ...parsedCells.fieldWarnings };
+      if (rawPlatformName && platformName !== rawPlatformName) {
+        addWarning(fieldWarnings, "platformName", `تم توحيد الاسم من "${rawPlatformName}"`);
+      }
+      const fieldConfidence = {
+        ...parsedCells.fieldConfidence,
+        platformName: cellConfidence(rowWords, bounds.width, columns.name)
+      };
 
       validateReportTotals("platform", platformName, parsedCells, totalOrders, totalRevenue);
 
@@ -222,7 +368,10 @@ const parsePlatformGrid = (
         totalOrders,
         totalRevenue,
         sourceFileId,
-        createdAt
+        createdAt,
+        ocrConfidence: averageConfidence(fieldConfidence),
+        ocrFieldConfidence: fieldConfidence,
+        ocrFieldWarnings: fieldWarnings
       };
     })
     .filter((row) => isValidPlatformRow(row.platformName, row.totalOrders, row.totalRevenue));
@@ -283,14 +432,121 @@ const parseNumericCells = (
   rowWords: OcrWord[],
   width: number,
   columns: NumericColumnMap
-): ParsedNumericCells => ({
-  morningOrders: cellNumber(rowWords, width, columns.morningOrders),
-  morningRevenue: cellNumber(rowWords, width, columns.morningRevenue),
-  eveningOrders: cellNumber(rowWords, width, columns.eveningOrders),
-  eveningRevenue: cellNumber(rowWords, width, columns.eveningRevenue),
-  reportTotalOrders: cellNumber(rowWords, width, columns.reportTotalOrders),
-  reportTotalRevenue: cellNumber(rowWords, width, columns.reportTotalRevenue)
-});
+): ParsedNumericResult => {
+  const details = {
+    morningOrders: cellNumericDetail(rowWords, width, columns.morningOrders),
+    morningRevenue: cellNumericDetail(rowWords, width, columns.morningRevenue),
+    eveningOrders: cellNumericDetail(rowWords, width, columns.eveningOrders),
+    eveningRevenue: cellNumericDetail(rowWords, width, columns.eveningRevenue),
+    reportTotalOrders: cellNumericDetail(rowWords, width, columns.reportTotalOrders),
+    reportTotalRevenue: cellNumericDetail(rowWords, width, columns.reportTotalRevenue)
+  } satisfies Record<NumericField, NumericCellDetail>;
+
+  const fieldWarnings: OcrFieldWarnings = {};
+  const fieldConfidence = Object.fromEntries(
+    Object.entries(details).map(([field, detail]) => [field, detail.confidence])
+  ) as Record<string, number>;
+
+  for (const [field, detail] of Object.entries(details)) {
+    if (detail.raw && !/^\d+$/.test(detail.normalized)) {
+      addWarning(fieldWarnings, field, "الخلية تحتوي رموز غير رقمية وتم تنظيفها تلقائيا");
+    }
+    if (detail.raw && detail.confidence < 72) {
+      addWarning(fieldWarnings, field, "ثقة OCR منخفضة، راجع الرقم قبل الحفظ");
+    }
+  }
+
+  const cells: ParsedNumericCells = {
+    morningOrders: details.morningOrders.value,
+    morningRevenue: details.morningRevenue.value,
+    eveningOrders: details.eveningOrders.value,
+    eveningRevenue: details.eveningRevenue.value,
+    reportTotalOrders: details.reportTotalOrders.value,
+    reportTotalRevenue: details.reportTotalRevenue.value
+  };
+
+  reconcileOrderCounts(cells, fieldWarnings);
+  reconcileRevenueValues(cells, fieldWarnings);
+
+  return { ...cells, fieldConfidence, fieldWarnings };
+};
+
+const cellNumericDetail = (rowWords: OcrWord[], width: number, range: [number, number]): NumericCellDetail => {
+  const words = cellWords(rowWords, width, range).sort((a, b) => centerX(a) - centerX(b));
+  const raw = words.map((word) => word.text).join("");
+  const normalized = normalizeNumericText(raw);
+  return {
+    raw,
+    normalized,
+    value: toNumber(normalized),
+    confidence: confidenceForWords(words)
+  };
+};
+
+const reconcileOrderCounts = (cells: ParsedNumericCells, warnings: OcrFieldWarnings) => {
+  if (!cells.reportTotalOrders || cells.morningOrders + cells.eveningOrders === cells.reportTotalOrders) return;
+
+  const correctedMorning = inferMissingCount(cells.morningOrders, cells.eveningOrders, cells.reportTotalOrders);
+  if (correctedMorning !== null) {
+    cells.morningOrders = correctedMorning;
+    addWarning(warnings, "morningOrders", "تم تصحيح العدد من إجمالي الصف");
+    return;
+  }
+
+  const correctedEvening = inferMissingCount(cells.eveningOrders, cells.morningOrders, cells.reportTotalOrders);
+  if (correctedEvening !== null) {
+    cells.eveningOrders = correctedEvening;
+    addWarning(warnings, "eveningOrders", "تم تصحيح العدد من إجمالي الصف");
+  }
+};
+
+const reconcileRevenueValues = (cells: ParsedNumericCells, warnings: OcrFieldWarnings) => {
+  if (!cells.reportTotalRevenue || cells.morningRevenue + cells.eveningRevenue === cells.reportTotalRevenue) return;
+
+  const correctedMorning = correctDuplicatedLeadingDigit(cells.morningRevenue, cells.eveningRevenue, cells.reportTotalRevenue);
+  if (correctedMorning !== null) {
+    cells.morningRevenue = correctedMorning;
+    addWarning(warnings, "morningRevenue", "تم تصحيح تكرار رقم في القيمة من إجمالي الصف");
+    return;
+  }
+
+  const correctedEvening = correctDuplicatedLeadingDigit(cells.eveningRevenue, cells.morningRevenue, cells.reportTotalRevenue);
+  if (correctedEvening !== null) {
+    cells.eveningRevenue = correctedEvening;
+    addWarning(warnings, "eveningRevenue", "تم تصحيح تكرار رقم في القيمة من إجمالي الصف");
+  }
+};
+
+const inferMissingCount = (value: number, otherValue: number, rowTotal: number) => {
+  const expected = rowTotal - otherValue;
+  if (expected < 0 || expected > 99 || expected === value) return null;
+  if (value < 10 && expected >= 10) return expected;
+  if (String(expected).endsWith(String(value))) return expected;
+  return null;
+};
+
+const correctDuplicatedLeadingDigit = (value: number, otherValue: number, rowTotal: number) => {
+  if (value <= rowTotal || value + otherValue === rowTotal) return null;
+  const text = String(value);
+  if (text.length < 2 || text[0] !== text[1]) return null;
+  const candidate = Number(text.slice(1));
+  return candidate + otherValue === rowTotal ? candidate : null;
+};
+
+const addWarning = (warnings: OcrFieldWarnings, field: string, message: string) => {
+  warnings[field] = [...(warnings[field] ?? []), message];
+};
+
+const confidenceForWords = (words: OcrWord[]) =>
+  Math.round(words.reduce((total, word) => total + Number(word.confidence ?? 100), 0) / Math.max(words.length, 1));
+
+const cellConfidence = (rowWords: OcrWord[], width: number, range: [number, number]) =>
+  confidenceForWords(cellWords(rowWords, width, range));
+
+const averageConfidence = (fieldConfidence: Record<string, number>) => {
+  const values = Object.values(fieldConfidence).filter((value) => Number.isFinite(value));
+  return Math.round(values.reduce((total, value) => total + value, 0) / Math.max(values.length, 1));
+};
 
 const validateReportTotals = (
   table: "salesperson" | "platform",
@@ -319,10 +575,65 @@ const validateReportTotals = (
 const centerX = (word: OcrWord) => (word.x0 + word.x1) / 2;
 const centerY = (word: OcrWord) => (word.y0 + word.y1) / 2;
 const avgY = (words: OcrWord[]) => words.reduce((total, word) => total + centerY(word), 0) / Math.max(words.length, 1);
+const normalizeLookupText = (value: string) =>
+  value
+    .replace(/[إأآ]/g, "ا")
+    .replace(/[ة]/g, "ه")
+    .replace(/[ى]/g, "ي")
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+const normalizePlatformDisplayName = (value: string) => {
+  const normalized = normalizeLookupText(value);
+  if (!normalized) return cleanText(value);
+
+  let bestMatch = { name: cleanText(value), score: 0 };
+  for (const item of pageNameDictionary) {
+    for (const alias of item.aliases) {
+      const normalizedAlias = normalizeLookupText(alias);
+      const score = similarity(normalized, normalizedAlias);
+      const containsMatch = normalized.includes(normalizedAlias) || normalizedAlias.includes(normalized);
+      const nextScore = containsMatch ? Math.max(score, 0.92) : score;
+      if (nextScore > bestMatch.score) bestMatch = { name: item.canonical, score: nextScore };
+    }
+  }
+
+  return bestMatch.score >= 0.68 ? bestMatch.name : cleanText(value);
+};
+
+const similarity = (left: string, right: string) => {
+  if (!left && !right) return 1;
+  if (!left || !right) return 0;
+  const distance = levenshtein(left, right);
+  return 1 - distance / Math.max(left.length, right.length, 1);
+};
+
+const levenshtein = (left: string, right: string) => {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= left.length; i += 1) {
+    let diagonal = previous[0];
+    previous[0] = i;
+    for (let j = 1; j <= right.length; j += 1) {
+      const saved = previous[j];
+      previous[j] = Math.min(
+        previous[j] + 1,
+        previous[j - 1] + 1,
+        diagonal + (left[i - 1] === right[j - 1] ? 0 : 1)
+      );
+      diagonal = saved;
+    }
+  }
+  return previous[right.length];
+};
+
 const isSalespersonHeaderText = (text: string) =>
   /السيليز|السيلز|المبيعات|كود|الأوردرات|الاوردرات|صباحي|مسائي|إجمالي مبيعات|اجمالي مبيعات/.test(text);
 const isPlatformHeaderText = (text: string) =>
-  /الصفحة|الصفحات|إجمالي اليوم|اجمالي اليوم|الأوردرات|الاوردرات|صباحي|مسائي/.test(text);
+  /الصفحة|الصفحات|إجمالي اليوم|اجمالي اليوم|إجمالي السوشيال|اجمالي السوشيال|social total|الأوردرات|الاوردرات|صباحي|مسائي/i.test(
+    text
+  ) || isSubtotalPlatformName(text);
 const isValidSalespersonRow = (name: string, code: string, totalOrders: number, totalRevenue: number) =>
   Boolean(name && code && !isSalespersonHeaderText(name) && (totalOrders > 0 || totalRevenue > 0));
 const isValidPlatformRow = (name: string, totalOrders: number, totalRevenue: number) =>
@@ -337,13 +648,13 @@ const shouldUseKnownReportFallback = (
   const tooFewPeople = people.length < Math.ceil(fallback.people.length * 0.75);
   const tooFewPlatforms = platforms.length < Math.ceil(fallback.platforms.length * 0.75);
   const badArabicNames = people.some((row) => !hasArabicText(row.salespersonName) || hasLatinText(row.salespersonName));
-  const badPlatformNames = platforms.some((row) => !hasArabicText(row.platformName) || hasLatinText(row.platformName));
+  const badPlatformNames = platforms.some((row) => !hasArabicText(row.platformName) && !hasLatinText(row.platformName));
   return tooFewPeople || tooFewPlatforms || badArabicNames || badPlatformNames;
 };
 const isReliableSalesParse = (people: SalesBySalesperson[], platforms: SalesByPlatform[]) => {
   const enoughRows = people.length >= 8 && platforms.length >= 4;
   const badPeopleNames = people.some((row) => !hasArabicText(row.salespersonName) || hasLatinText(row.salespersonName));
-  const badPlatformNames = platforms.some((row) => !hasArabicText(row.platformName) || hasLatinText(row.platformName));
+  const badPlatformNames = platforms.some((row) => !hasArabicText(row.platformName) && !hasLatinText(row.platformName));
   const impossiblePeople = people.some((row) => row.totalOrders > 80 || row.totalRevenue > 100000);
   const impossiblePlatforms = platforms.some((row) => row.totalOrders > 300 || row.totalRevenue > 300000);
   return enoughRows && !badPeopleNames && !badPlatformNames && !impossiblePeople && !impossiblePlatforms;
@@ -353,10 +664,13 @@ const createKnownReportFallback = (reportDate: string, sourceFileId: string) =>
 
 const aliases: Record<string, string[]> = {
   reportDate: ["date", "day", "التاريخ", "اليوم"],
+  adAccountName: ["account name", "ad account", "account", "اسم الحساب", "حساب الإعلانات", "حساب الاعلانات"],
+  resultType: ["result indicator", "result type", "نوع النتيجة", "مؤشر النتيجة"],
+  results: ["results", "النتائج"],
   campaignName: ["campaign", "campaign name", "اسم الحملة", "Campaign name"],
   adsetName: ["ad set", "adset", "ad group", "adgroup", "اسم المجموعة", "Ad group name"],
   adName: ["ad name", "ad", "اسم الإعلان"],
-  spend: ["amount spent", "spend", "cost", "مصروف", "التكلفة"],
+  spend: ["amount spent (egp)", "amount spent", "spend", "مصروف", "التكلفة"],
   impressions: ["impressions", "الظهور"],
   reach: ["reach", "الوصول"],
   clicks: ["clicks", "link clicks", "النقرات"],
@@ -364,6 +678,8 @@ const aliases: Record<string, string[]> = {
   cpc: ["cpc", "cost per click"],
   cpm: ["cpm"],
   leads: ["leads", "lead", "عملاء محتملون"],
+  messagesCount: ["messages", "messaging conversations", "new messaging conversations", "messaging contacts", "message conversations", "رسائل", "الرسائل", "محادثات"],
+  commentsCount: ["comments", "post comments", "comment", "تعليقات", "الكومنتات", "كومنتات"],
   purchases: ["purchases", "orders", "conversions", "purchase", "طلبات"],
   purchaseValue: ["purchase conversion value", "purchase value", "revenue", "value", "قيمة"]
 };
@@ -373,7 +689,8 @@ export const parseAdsWorkbook = async (
   platform: AdsPlatform,
   salesPlatformName: string,
   fallbackDate: string,
-  sourceFileId: string
+  sourceFileId: string,
+  fallbackAdAccountName = ""
 ): Promise<AdsRow[]> => {
   const buffer = await file.arrayBuffer();
   const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
@@ -385,11 +702,16 @@ export const parseAdsWorkbook = async (
     .map((row) => {
       const read = (field: keyof typeof aliases) => readAliased(row, aliases[field]);
       const reportDate = normalizeExcelDate(read("reportDate")) || fallbackDate;
+      const resultType = String(read("resultType") || "").toLowerCase();
+      const resultCount = toNumber(read("results"));
+      const messagesCount = toNumber(read("messagesCount")) || (isMessageResult(resultType) ? resultCount : 0);
+      const commentsCount = toNumber(read("commentsCount")) || (isCommentResult(resultType) ? resultCount : 0);
       return {
         id: createId(),
         reportDate,
         adsPlatform: platform,
         salesPlatformName,
+        adAccountName: String(read("adAccountName") || fallbackAdAccountName || "غير محدد"),
         campaignName: String(read("campaignName") || "بدون اسم"),
         adsetName: String(read("adsetName") || ""),
         adName: String(read("adName") || ""),
@@ -401,6 +723,8 @@ export const parseAdsWorkbook = async (
         cpc: toNumber(read("cpc")),
         cpm: toNumber(read("cpm")),
         leads: toNumber(read("leads")),
+        messagesCount,
+        commentsCount,
         purchases: toNumber(read("purchases")),
         purchaseValue: toNumber(read("purchaseValue")),
         sourceFileId,
@@ -412,9 +736,17 @@ export const parseAdsWorkbook = async (
 
 const readAliased = (row: Record<string, unknown>, names: string[]) => {
   const keys = Object.keys(row);
-  const found = keys.find((key) => names.some((alias) => key.toLowerCase().trim().includes(alias.toLowerCase())));
+  const normalizedNames = names.map(normalizeHeader);
+  const found =
+    keys.find((key) => normalizedNames.includes(normalizeHeader(key))) ??
+    keys.find((key) => normalizedNames.some((alias) => normalizeHeader(key).startsWith(alias))) ??
+    keys.find((key) => normalizedNames.some((alias) => normalizeHeader(key).includes(alias)));
   return found ? row[found] : "";
 };
+
+const normalizeHeader = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+const isMessageResult = (value: string) => /messag|conversation|محادث|رسائل|رسالة/.test(value);
+const isCommentResult = (value: string) => /comment|تعليق|كومنت/.test(value);
 
 const normalizeExcelDate = (value: unknown): string => {
   if (!value) return "";
@@ -462,7 +794,6 @@ export const createSampleSales = (reportDate: string, sourceFileId: string) => {
         ["واتس اب ريجينكس", 5, 6332, 3, 4655],
         ["ريجينكس", 25, 28623, 15, 17810],
         ["انستجرام", 2, 1800, 0, 0],
-        ["إجمالي السوشيال", 43, 48155, 24, 30331],
         ["تليفون إعلان", 18, 30202, 4, 6010],
         ["تيم المتابعة", 11, 15925, 6, 7700],
         ["المتابعة", 39, 49058, 7, 6177]
@@ -498,7 +829,6 @@ export const createSampleSales = (reportDate: string, sourceFileId: string) => {
         ["ريجينكس eg", 6, 6150, 7, 8688],
         ["واتس اب ريجينكس", 4, 6066, 5, 4011],
         ["ريجينكس", 9, 10515, 12, 17093],
-        ["إجمالي السوشيال", 19, 22731, 24, 29792],
         ["تليفون إعلان", 6, 8140, 8, 7144],
         ["تيم المتابعة", 12, 19741, 7, 7050],
         ["المتابعة", 29, 51165, 8, 6972]
@@ -535,7 +865,6 @@ export const createSampleSales = (reportDate: string, sourceFileId: string) => {
         ["ريجينكس eg", 14, 14625, 15, 12496],
         ["واتس اب ريجينكس", 13, 18888, 8, 9350],
         ["ريجينكس", 33, 31931, 37, 35781],
-        ["إجمالي السوشيال", 60, 65444, 60, 57627],
         ["تليفون إعلان", 22, 32990, 20, 24720],
         ["تيم المتابعة", 14, 10549, 0, 0],
         ["المتابعة", 43, 51311, 10, 7950]

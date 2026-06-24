@@ -9,6 +9,7 @@ import type {
   SalesRawFile,
   UploadMode
 } from "../types";
+import { isSubtotalPlatformName } from "./metrics";
 import { isSupabaseConfigured, supabase } from "./supabase";
 
 const STORAGE_KEY = "daily-report-dashboard-v1";
@@ -17,10 +18,17 @@ const defaultPlatforms = [
   "ريجينكس",
   "ريجينكس eg",
   "واتس اب ريجينكس",
+  "واتساب ريجينكس",
+  "واتساب نيو",
+  "واتساب تيك توك",
+  "Website CELIXI",
   "انستجرام",
-  "إجمالي السوشيال",
+  "Instagram",
   "تليفون إعلان",
+  "TV Ad",
   "تيم المتابعة",
+  "Follow-up Team",
+  "Follow-up",
   "المتابعة"
 ];
 
@@ -44,7 +52,8 @@ export const emptyData = (): AppData => ({
 export const getStorageMode = () => (isSupabaseConfigured ? "Supabase" : "Local fallback");
 
 const mergeDefaultPlatforms = (settings: PlatformSetting[] = []) => {
-  const seen = new Set(settings.map((item) => item.platformName.trim().toLowerCase()));
+  const filteredSettings = settings.filter((item) => !isSubtotalPlatformName(item.platformName));
+  const seen = new Set(filteredSettings.map((item) => item.platformName.trim().toLowerCase()));
   const missing = defaultPlatforms
     .filter((platformName) => !seen.has(platformName.trim().toLowerCase()))
     .map((platformName) => ({
@@ -53,7 +62,7 @@ const mergeDefaultPlatforms = (settings: PlatformSetting[] = []) => {
       isActive: true,
       createdAt: new Date().toISOString()
     }));
-  return [...settings, ...missing];
+  return [...filteredSettings, ...missing];
 };
 
 export const loadData = async (): Promise<AppData> => {
@@ -137,10 +146,11 @@ const loadLocalData = (): AppData => {
       ...parsed,
       adsRawFiles: (parsed.adsRawFiles ?? []).map((file) => ({
         ...file,
-        salesPlatformName: file.salesPlatformName || "غير محدد"
+        salesPlatformName: file.salesPlatformName || "غير محدد",
+        adAccountName: file.adAccountName || "غير محدد"
       })),
-      metaAds: (parsed.metaAds ?? []).map((row) => ({ ...row, salesPlatformName: row.salesPlatformName || "غير محدد" })),
-      tiktokAds: (parsed.tiktokAds ?? []).map((row) => ({ ...row, salesPlatformName: row.salesPlatformName || "غير محدد" })),
+      metaAds: (parsed.metaAds ?? []).map(withAdsDefaults),
+      tiktokAds: (parsed.tiktokAds ?? []).map(withAdsDefaults),
       platformSettings: mergeDefaultPlatforms(
         parsed.platformSettings?.length ? parsed.platformSettings : emptyData().platformSettings
       )
@@ -154,6 +164,14 @@ const saveLocalData = (data: AppData) => {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   window.dispatchEvent(new CustomEvent("dashboard-data-updated"));
 };
+
+const withAdsDefaults = (row: AdsRow): AdsRow => ({
+  ...row,
+  salesPlatformName: row.salesPlatformName || "غير محدد",
+  adAccountName: row.adAccountName || "غير محدد",
+  messagesCount: Number(row.messagesCount) || 0,
+  commentsCount: Number(row.commentsCount) || 0
+});
 
 const selectAll = async (table: string) => {
   if (!supabase) return [];
@@ -208,7 +226,7 @@ const fillMissingPlatforms = (
   const existing = new Set(rows.map((row) => row.platformName.trim().toLowerCase()));
   const now = new Date().toISOString();
   const zeroRows = settings
-    .filter((item) => item.isActive && !existing.has(item.platformName.trim().toLowerCase()))
+    .filter((item) => item.isActive && !isSubtotalPlatformName(item.platformName) && !existing.has(item.platformName.trim().toLowerCase()))
     .map((item) => ({
       id: createId(),
       reportDate,
@@ -285,11 +303,17 @@ export const saveAdsUpload = async (
               !(
                 file.reportDate === rawFile.reportDate &&
                 file.adsPlatform === platform &&
-                file.salesPlatformName === rawFile.salesPlatformName
+                file.salesPlatformName === rawFile.salesPlatformName &&
+                (file.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
               )
           ),
           [tableKey]: current[tableKey].filter(
-            (row) => !(row.reportDate === rawFile.reportDate && row.salesPlatformName === rawFile.salesPlatformName)
+            (row) =>
+              !(
+                row.reportDate === rawFile.reportDate &&
+                row.salesPlatformName === rawFile.salesPlatformName &&
+                (row.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
+              )
           )
         }
       : current;
@@ -311,15 +335,22 @@ export const saveAdsUpload = async (
         .eq("report_date", rawFile.reportDate)
         .eq("ads_platform", platform)
         .eq("sales_platform_name", rawFile.salesPlatformName)
+        .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
     );
 
     if (platform === "Meta") {
       await deleteWhere("meta_ads", (query) =>
-        query.eq("report_date", rawFile.reportDate).eq("sales_platform_name", rawFile.salesPlatformName)
+        query
+          .eq("report_date", rawFile.reportDate)
+          .eq("sales_platform_name", rawFile.salesPlatformName)
+          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
       );
     } else {
       await deleteWhere("tiktok_ads", (query) =>
-        query.eq("report_date", rawFile.reportDate).eq("sales_platform_name", rawFile.salesPlatformName)
+        query
+          .eq("report_date", rawFile.reportDate)
+          .eq("sales_platform_name", rawFile.salesPlatformName)
+          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
       );
     }
   }
@@ -421,6 +452,7 @@ const fromAdsRawFile = (row: any): AdsRawFile => ({
   reportDate: row.report_date,
   adsPlatform: row.ads_platform,
   salesPlatformName: row.sales_platform_name || "غير محدد",
+  adAccountName: row.ad_account_name || "غير محدد",
   parsingStatus: row.parsing_status,
   createdAt: row.created_at
 });
@@ -433,6 +465,7 @@ const toAdsRawFileRow = (row: AdsRawFile) => ({
   report_date: row.reportDate,
   ads_platform: row.adsPlatform,
   sales_platform_name: row.salesPlatformName,
+  ad_account_name: row.adAccountName || "غير محدد",
   parsing_status: row.parsingStatus,
   created_at: row.createdAt
 });
@@ -442,6 +475,7 @@ const fromAdsRow = (row: any, adsPlatform: AdsPlatform): AdsRow => ({
   reportDate: row.report_date,
   adsPlatform,
   salesPlatformName: row.sales_platform_name || "غير محدد",
+  adAccountName: row.ad_account_name || "غير محدد",
   campaignName: row.campaign_name,
   adsetName: row.adset_name ?? row.adgroup_name ?? "",
   adName: row.ad_name,
@@ -453,6 +487,8 @@ const fromAdsRow = (row: any, adsPlatform: AdsPlatform): AdsRow => ({
   cpc: Number(row.cpc) || 0,
   cpm: Number(row.cpm) || 0,
   leads: Number(row.leads ?? row.conversions) || 0,
+  messagesCount: Number(row.messages_count) || 0,
+  commentsCount: Number(row.comments_count) || 0,
   purchases: Number(row.purchases ?? row.conversions) || 0,
   purchaseValue: Number(row.purchase_value ?? row.revenue) || 0,
   sourceFileId: row.source_file_id,
@@ -463,6 +499,7 @@ const toMetaAdsRow = (row: AdsRow) => ({
   id: row.id,
   report_date: row.reportDate,
   sales_platform_name: row.salesPlatformName,
+  ad_account_name: row.adAccountName || "غير محدد",
   campaign_name: row.campaignName,
   adset_name: row.adsetName,
   ad_name: row.adName,
@@ -474,6 +511,8 @@ const toMetaAdsRow = (row: AdsRow) => ({
   cpc: row.cpc,
   cpm: row.cpm,
   leads: row.leads,
+  messages_count: row.messagesCount || 0,
+  comments_count: row.commentsCount || 0,
   purchases: row.purchases,
   purchase_value: row.purchaseValue,
   source_file_id: row.sourceFileId,
@@ -484,6 +523,7 @@ const toTikTokAdsRow = (row: AdsRow) => ({
   id: row.id,
   report_date: row.reportDate,
   sales_platform_name: row.salesPlatformName,
+  ad_account_name: row.adAccountName || "غير محدد",
   campaign_name: row.campaignName,
   adgroup_name: row.adsetName,
   ad_name: row.adName,
@@ -493,6 +533,8 @@ const toTikTokAdsRow = (row: AdsRow) => ({
   ctr: row.ctr,
   cpc: row.cpc,
   cpm: row.cpm,
+  messages_count: row.messagesCount || 0,
+  comments_count: row.commentsCount || 0,
   conversions: row.purchases,
   cost_per_conversion: row.purchases ? row.spend / row.purchases : 0,
   revenue: row.purchaseValue,

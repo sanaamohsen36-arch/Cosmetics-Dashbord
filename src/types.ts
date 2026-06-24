@@ -1,6 +1,8 @@
 export type AdsPlatform = "Meta" | "TikTok";
 export type UploadMode = "replace" | "merge" | "cancel";
 export type PageKey = "upload" | "dashboard" | "salespeople" | "platforms" | "ads" | "settings";
+export type OcrFieldConfidence = Record<string, number>;
+export type OcrFieldWarnings = Record<string, string[]>;
 
 export interface SalesRawFile {
   id: string;
@@ -25,6 +27,9 @@ export interface SalesBySalesperson {
   totalRevenue: number;
   sourceFileId: string;
   createdAt: string;
+  ocrConfidence?: number;
+  ocrFieldConfidence?: OcrFieldConfidence;
+  ocrFieldWarnings?: OcrFieldWarnings;
 }
 
 export interface SalesByPlatform {
@@ -39,6 +44,9 @@ export interface SalesByPlatform {
   totalRevenue: number;
   sourceFileId: string;
   createdAt: string;
+  ocrConfidence?: number;
+  ocrFieldConfidence?: OcrFieldConfidence;
+  ocrFieldWarnings?: OcrFieldWarnings;
 }
 
 export interface AdsRawFile {
@@ -49,6 +57,7 @@ export interface AdsRawFile {
   reportDate: string;
   adsPlatform: AdsPlatform;
   salesPlatformName: string;
+  adAccountName?: string;
   parsingStatus: "success" | "failed";
   createdAt: string;
 }
@@ -58,6 +67,7 @@ export interface AdsRow {
   reportDate: string;
   adsPlatform: AdsPlatform;
   salesPlatformName: string;
+  adAccountName?: string;
   campaignName: string;
   adsetName: string;
   adName: string;
@@ -69,6 +79,8 @@ export interface AdsRow {
   cpc: number;
   cpm: number;
   leads: number;
+  messagesCount?: number;
+  commentsCount?: number;
   purchases: number;
   purchaseValue: number;
   sourceFileId: string;
@@ -107,6 +119,9 @@ export interface Kpis {
   totalAdsSpend: number;
   metaSpend: number;
   tiktokSpend: number;
+  messagesCount: number;
+  commentsCount: number;
+  messageConversionRate: number | null;
   roas: number | null;
   roi: number | null;
   cpa: number | null;
