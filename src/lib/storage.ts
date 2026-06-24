@@ -502,6 +502,24 @@ export const deleteDataForDate = async (current: AppData, reportDate: string): P
   return next;
 };
 
+export const deleteSalesForDate = async (current: AppData, reportDate: string): Promise<AppData> => {
+  const next = {
+    ...current,
+    salesRawFiles: current.salesRawFiles.filter((file) => file.reportDate !== reportDate),
+    salesBySalesperson: current.salesBySalesperson.filter((row) => row.reportDate !== reportDate),
+    salesByPlatform: current.salesByPlatform.filter((row) => row.reportDate !== reportDate)
+  };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await deleteWhere("sales_by_platform", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("sales_raw_files", (query) => query.eq("report_date", reportDate));
+  await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  return next;
+};
+
 export const deleteAdsForDate = async (current: AppData, reportDate: string, platform: AdsPlatform): Promise<AppData> => {
   const tableKey = platform === "Meta" ? "metaAds" : "tiktokAds";
   const next = {

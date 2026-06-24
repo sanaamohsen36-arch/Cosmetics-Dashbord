@@ -49,6 +49,7 @@ import {
   createId,
   deleteAdsForDate,
   deleteDataForDate,
+  deleteSalesForDate,
   deleteRawFile,
   emptyData,
   getStorageMode,
@@ -58,7 +59,7 @@ import {
   saveSalesUpload,
   subscribeToDataChanges
 } from "./lib/storage";
-import { createSampleSales, getLatestSalesOcrDebugImages, inferDateFromFileName, parseAdsWorkbook, parseSalesOcrText, runArabicOcr } from "./lib/parsing";
+import { createSampleSales, getLatestSalesOcrDebugImages, inferDateFromFileName, parseAdsWorkbook, parseSalesOcrText, parseSalesWorkbook, runArabicOcr } from "./lib/parsing";
 
 const today = new Date().toISOString().slice(0, 10);
 const numberFormat = new Intl.NumberFormat("ar-EG");
@@ -304,7 +305,8 @@ function UploadPage({
   const [uploadUnlocked, setUploadUnlocked] = useState(false);
   const [uploadPassword, setUploadPassword] = useState("");
   const [authMessage, setAuthMessage] = useState("اكتبي باسورد الرفع للمتابعة.");
-  const [salesFile, setSalesFile] = useState<File | null>(null);
+  const [salesExcelFile, setSalesExcelFile] = useState<File | null>(null);
+  const [salesImageFile, setSalesImageFile] = useState<File | null>(null);
   const [salesDate, setSalesDate] = useState(today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
   const [platformPreview, setPlatformPreview] = useState<SalesByPlatform[]>([]);
@@ -314,8 +316,7 @@ function UploadPage({
   const [ocrText, setOcrText] = useState("");
   const [ocrDebugImages, setOcrDebugImages] = useState<string[]>([]);
 
-  const handleSalesFile = (file: File | null) => {
-    setSalesFile(file);
+  const resetSalesPreview = () => {
     setPeoplePreview([]);
     setPlatformPreview([]);
     setOriginalPeoplePreview([]);
@@ -323,11 +324,25 @@ function UploadPage({
     setOcrText("");
     setOcrDebugImages([]);
     setOcrProgress("");
+  };
+
+  const handleSalesExcelFile = (file: File | null) => {
+    setSalesExcelFile(file);
+    resetSalesPreview();
     if (file) setSalesDate(inferDateFromFileName(file.name));
   };
 
-  const sourceFileId = useMemo(() => createId(), [salesFile?.name]);
-  const existingSalesDate = data.salesBySalesperson.some((row) => row.reportDate === salesDate);
+  const handleSalesImageFile = (file: File | null) => {
+    setSalesImageFile(file);
+    resetSalesPreview();
+    if (file) setSalesDate(inferDateFromFileName(file.name));
+  };
+
+  const sourceFileId = useMemo(() => createId(), [salesExcelFile?.name, salesImageFile?.name]);
+  const existingSalesDate =
+    data.salesBySalesperson.some((row) => row.reportDate === salesDate) ||
+    data.salesByPlatform.some((row) => row.reportDate === salesDate) ||
+    data.salesRawFiles.some((file) => file.reportDate === salesDate);
   const selectedMonth = salesDate.slice(0, 7);
 
   useEffect(() => {
@@ -356,11 +371,36 @@ function UploadPage({
       .map((item) => normalizePlatform({ ...blankPlatform(salesDate, sourceFileId), platformName: item.platformName }))
   });
 
+  const previewSalesExcel = async () => {
+    if (!salesExcelFile) return;
+    setOcrProgress("جاري قراءة ملف Excel/CSV...");
+    try {
+      const parsed = await parseSalesWorkbook(salesExcelFile, salesDate, sourceFileId);
+      const template = createManualSalesTemplate();
+      const people = parsed.people.length ? parsed.people : template.people;
+      const platforms = parsed.platforms.length ? parsed.platforms : template.platforms;
+      setOriginalPeoplePreview(cloneSalesRows(people));
+      setOriginalPlatformPreview(cloneSalesRows(platforms));
+      const corrected = applyOcrCorrections(data, people, platforms);
+      setPeoplePreview(corrected.people);
+      setPlatformPreview(corrected.platforms);
+      setOcrDebugImages([]);
+      setOcrText("");
+      setOcrProgress(
+        parsed.people.length || parsed.platforms.length
+          ? "تمت قراءة ملف المبيعات. راجعي الجدول وعدلي أي خلية قبل Save Final Data."
+          : "لم يتم العثور على شيتات pages_sales أو salespeople_sales. تم فتح قالب يدوي لليوم المختار."
+      );
+    } catch (error) {
+      setOcrProgress(error instanceof Error ? error.message : "تعذر قراءة ملف المبيعات");
+    }
+  };
+
   const runOcr = async () => {
-    if (!salesFile) return;
+    if (!salesImageFile) return;
     setOcrProgress("بدء OCR...");
     try {
-      const text = await runArabicOcr(salesFile, (message, progress) => setOcrProgress(`${message} ${progress}%`));
+      const text = await runArabicOcr(salesImageFile, (message, progress) => setOcrProgress(`${message} ${progress}%`));
       setOcrText(text);
       const parsed = parseSalesOcrText(text, salesDate, sourceFileId);
       const template = createManualSalesTemplate();
@@ -396,8 +436,8 @@ function UploadPage({
     setOcrProgress(sample.people.length || sample.platforms.length ? "تم تحميل نموذج قابل للتعديل من شكل التقرير المرفق." : "تم تحميل قالب يدوي لليوم المختار.");
   };
 
-  const saveSales = async () => {
-    if (existingSalesDate && !window.confirm("Data already exists for this date. Replace old sales data?")) {
+  const saveSales = async (forceReplace = false) => {
+    if (existingSalesDate && !forceReplace && !window.confirm("Data already exists for this date. Replace old sales data?")) {
       setOcrProgress("تم إلغاء الحفظ، لم يتم استبدال بيانات اليوم.");
       return;
     }
@@ -418,8 +458,8 @@ function UploadPage({
     const now = new Date().toISOString();
     const rawFile: SalesRawFile = {
       id: sourceFileId,
-      fileName: salesFile?.name ?? "manual-sales-report",
-      filePath: salesFile?.name ?? "manual",
+      fileName: salesExcelFile?.name ?? salesImageFile?.name ?? "manual-sales-report",
+      filePath: salesExcelFile?.name ?? salesImageFile?.name ?? "manual",
       uploadedAt: now,
       reportDate: salesDate,
       ocrStatus: ocrText ? "success" : "manual",
@@ -431,12 +471,33 @@ function UploadPage({
       rawFile,
       normalizedPeople,
       normalizedPlatforms,
-      existingSalesDate ? "replace" : "merge"
+      "replace"
     );
     setOcrProgress("جاري حفظ تقرير المبيعات على Supabase...");
     await commitData(next);
     setRange({ from: salesDate, to: salesDate });
     setOcrProgress("تم حفظ تقرير المبيعات وتحديث اللوحة.");
+  };
+
+  const replaceExistingDateData = async () => {
+    if (!peoplePreview.length && !platformPreview.length) {
+      setOcrProgress("اعملي Preview للملف الأول قبل استبدال بيانات اليوم.");
+      return;
+    }
+    if (!existingSalesDate || window.confirm("Replace existing sales data for this date?")) {
+      await saveSales(true);
+    }
+  };
+
+  const deleteSalesDate = async () => {
+    if (!window.confirm(`Delete sales data only for ${salesDate}?`)) return;
+    const next = await deleteSalesForDate(data, salesDate);
+    await commitData(next);
+    setPeoplePreview([]);
+    setPlatformPreview([]);
+    setOriginalPeoplePreview([]);
+    setOriginalPlatformPreview([]);
+    setOcrProgress("تم حذف مبيعات اليوم فقط وتحديث اللوحة.");
   };
 
   const saveCorrectionsOnly = async () => {
@@ -493,15 +554,15 @@ function UploadPage({
 
       <div className="panel upload-panel">
         <div className="section-title">
-          <UploadCloud />
+          <FileSpreadsheet />
           <div>
-            <h2>رفع صورة تقفيل المبيعات</h2>
-            <p>يدعم OCR عربي/إنجليزي، مع مراجعة يدوية قبل الحفظ.</p>
+            <h2>رفع ملف مبيعات Excel / CSV</h2>
+            <p>المسار الأساسي الآن هو ملف .xlsx أو .xls أو .csv يحتوي pages_sales و salespeople_sales، ثم مراجعة يدوية قبل الحفظ.</p>
           </div>
         </div>
         <div className="upload-box">
-          <input type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png,image/*" onChange={(event) => handleSalesFile(event.target.files?.[0] ?? null)} />
-          <span>{salesFile ? salesFile.name : "اختر صورة التقرير اليومي JPG أو screenshot"}</span>
+          <input type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(event) => handleSalesExcelFile(event.target.files?.[0] ?? null)} />
+          <span>{salesExcelFile ? salesExcelFile.name : "اختاري ملف المبيعات اليومي Excel أو CSV"}</span>
         </div>
         <div className="form-row">
           <label>
@@ -511,18 +572,43 @@ function UploadPage({
           {existingSalesDate && <Badge text="هذا اليوم محفوظ، الحفظ الجديد سيطلب تأكيد الاستبدال" />}
         </div>
         <div className="actions">
-          <button className="primary" disabled={!salesFile} onClick={runOcr}>
-            <Search size={18} /> تشغيل OCR
+          <button className="primary" disabled={!salesExcelFile} onClick={previewSalesExcel}>
+            <FileSpreadsheet size={18} /> Preview
           </button>
           <button onClick={loadSample}>تحميل نموذج</button>
           <button disabled={!peoplePreview.length && !platformPreview.length} onClick={saveCorrectionsOnly}>
             Save Corrections Only
           </button>
-          <button className="success" disabled={!peoplePreview.length && !platformPreview.length} onClick={saveSales}>
+          <button disabled={!peoplePreview.length && !platformPreview.length} onClick={replaceExistingDateData}>
+            Replace Existing Date Data
+          </button>
+          <button onClick={deleteSalesDate}>
+            Delete Sales Data by Date
+          </button>
+          <button className="success" disabled={!peoplePreview.length && !platformPreview.length} onClick={() => void saveSales()}>
             <Save size={18} /> Save Final Data
           </button>
         </div>
         {ocrProgress && <p className="status-line">{ocrProgress}</p>}
+      </div>
+
+      <div className="panel upload-panel beta-upload">
+        <div className="section-title">
+          <Search />
+          <div>
+            <h2>Upload Image OCR - Beta</h2>
+            <p>اختياري فقط للصور القديمة. الأفضل استخدام Excel/CSV لتجنب أخطاء قراءة الأرقام والأسماء.</p>
+          </div>
+        </div>
+        <div className="upload-box">
+          <input type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png,image/*" onChange={(event) => handleSalesImageFile(event.target.files?.[0] ?? null)} />
+          <span>{salesImageFile ? salesImageFile.name : "اختاري صورة أو screenshot للتجربة فقط"}</span>
+        </div>
+        <div className="actions">
+          <button disabled={!salesImageFile} onClick={runOcr}>
+            <Search size={18} /> تشغيل OCR Beta
+          </button>
+        </div>
       </div>
 
       {ocrDebugImages.length > 0 && (

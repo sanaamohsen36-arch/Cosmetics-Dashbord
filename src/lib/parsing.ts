@@ -747,6 +747,204 @@ const aliases: Record<string, string[]> = {
   purchaseValue: ["purchase conversion value", "purchase value", "revenue", "value", "قيمة"]
 };
 
+const salesAliases = {
+  reportDate: ["report_date", "report date", "date", "التاريخ", "تاريخ التقرير"],
+  pageName: ["page_name", "page name", "platform", "platform_name", "الصفحة", "اسم الصفحة", "البلاتفورم"],
+  salespersonCode: ["salesperson_code", "salesperson code", "code", "كود السيلز", "الكود"],
+  salespersonName: ["salesperson_name", "salesperson name", "name", "السيلز", "اسم السيلز", "الاسم"],
+  morningOrders: ["morning_orders", "morning orders", "طلبات صباحي", "عدد صباحي"],
+  morningValue: ["morning_value", "morning value", "morning_revenue", "قيمة صباحي"],
+  eveningOrders: ["evening_orders", "evening orders", "طلبات مسائي", "عدد مسائي"],
+  eveningValue: ["evening_value", "evening value", "evening_revenue", "قيمة مسائي"],
+  totalOrders: ["total_orders", "total orders", "اجمالي الطلبات", "إجمالي الطلبات"],
+  totalValue: ["total_value", "total value", "total_revenue", "اجمالي القيمة", "إجمالي القيمة"]
+};
+
+type SalesSection = "pages" | "salespeople";
+
+export const parseSalesWorkbook = async (
+  file: File,
+  fallbackDate: string,
+  sourceFileId: string
+): Promise<{ people: SalesBySalesperson[]; platforms: SalesByPlatform[] }> => {
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+  const now = new Date().toISOString();
+  const people: SalesBySalesperson[] = [];
+  const platforms: SalesByPlatform[] = [];
+
+  for (const sheetName of workbook.SheetNames) {
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", raw: false });
+    const detectedSections = extractSalesSections(rows, sheetName);
+
+    for (const section of detectedSections) {
+      if (section.type === "pages") {
+        platforms.push(...section.rows.map((row) => salesPlatformFromRow(row, fallbackDate, sourceFileId, now)));
+      } else {
+        people.push(...section.rows.map((row) => salesPersonFromRow(row, fallbackDate, sourceFileId, now)));
+      }
+    }
+  }
+
+  return {
+    people: people.filter((row) => row.salespersonName || row.salespersonCode || row.totalOrders || row.totalRevenue),
+    platforms: platforms.filter((row) => row.platformName || row.totalOrders || row.totalRevenue)
+  };
+};
+
+const extractSalesSections = (rows: unknown[][], sheetName: string): Array<{ type: SalesSection; rows: Record<string, unknown>[] }> => {
+  const sections: Array<{ type: SalesSection; rows: Record<string, unknown>[] }> = [];
+  const sheetType = detectSalesSectionType([sheetName]);
+
+  for (let index = 0; index < rows.length; index += 1) {
+    const cells = rows[index].map((cell) => String(cell ?? ""));
+    const headerType = detectSalesSectionType(cells) ?? sheetType;
+    if (!headerType || !looksLikeSalesHeader(cells, headerType)) continue;
+
+    const header = cells.map(normalizeHeader);
+    const sectionRows: Record<string, unknown>[] = [];
+    for (let rowIndex = index + 1; rowIndex < rows.length; rowIndex += 1) {
+      const rowCells = rows[rowIndex];
+      const textCells = rowCells.map((cell) => String(cell ?? ""));
+      if (textCells.every((cell) => !cell.trim())) break;
+      const nextType = detectSalesSectionType(textCells);
+      if (nextType && looksLikeSalesHeader(textCells, nextType)) {
+        index = rowIndex - 1;
+        break;
+      }
+      const row: Record<string, unknown> = {};
+      header.forEach((key, cellIndex) => {
+        if (key) row[key] = rowCells[cellIndex] ?? "";
+      });
+      sectionRows.push(row);
+    }
+
+    if (sectionRows.length) sections.push({ type: headerType, rows: sectionRows });
+  }
+
+  if (!sections.length && rows.length > 1) {
+    const headers = rows[0].map((cell) => String(cell ?? ""));
+    const fallbackType = detectSalesSectionType(headers) ?? sheetType;
+    if (fallbackType) {
+      const header = headers.map(normalizeHeader);
+      const sectionRows = rows.slice(1).filter((row) => row.some((cell) => String(cell ?? "").trim())).map((rowCells) => {
+        const row: Record<string, unknown> = {};
+        header.forEach((key, cellIndex) => {
+          if (key) row[key] = rowCells[cellIndex] ?? "";
+        });
+        return row;
+      });
+      sections.push({ type: fallbackType, rows: sectionRows });
+    }
+  }
+
+  return sections;
+};
+
+const detectSalesSectionType = (values: string[]): SalesSection | null => {
+  const normalized = values.map(normalizeHeader).join(" ");
+  if (/pages_sales|page_name|platform_name|اسم الصفحة|الصفحة/.test(normalized)) return "pages";
+  if (/salespeople_sales|salesperson_code|salesperson_name|كود السيلز|اسم السيلز|السيلز/.test(normalized)) return "salespeople";
+  return null;
+};
+
+const looksLikeSalesHeader = (cells: string[], type: SalesSection) => {
+  const normalized = cells.map(normalizeHeader);
+  const hasMorning = normalized.some((cell) => salesAliases.morningOrders.map(normalizeHeader).includes(cell));
+  const hasEvening = normalized.some((cell) => salesAliases.eveningOrders.map(normalizeHeader).includes(cell));
+  const hasName =
+    type === "pages"
+      ? normalized.some((cell) => salesAliases.pageName.map(normalizeHeader).includes(cell))
+      : normalized.some((cell) => salesAliases.salespersonName.map(normalizeHeader).includes(cell) || salesAliases.salespersonCode.map(normalizeHeader).includes(cell));
+  return hasName && (hasMorning || hasEvening);
+};
+
+const salesPlatformFromRow = (
+  row: Record<string, unknown>,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string
+): SalesByPlatform => {
+  const read = (field: keyof typeof salesAliases) => readAliased(row, salesAliases[field]);
+  const morningOrders = toNumber(read("morningOrders"));
+  const morningRevenue = toNumber(read("morningValue"));
+  const eveningOrders = toNumber(read("eveningOrders"));
+  const eveningRevenue = toNumber(read("eveningValue"));
+  const providedTotalOrders = toNumber(read("totalOrders"));
+  const providedTotalRevenue = toNumber(read("totalValue"));
+  const fieldWarnings = salesTotalWarnings(morningOrders, morningRevenue, eveningOrders, eveningRevenue, providedTotalOrders, providedTotalRevenue);
+  return {
+    id: createId(),
+    reportDate: normalizeExcelDate(read("reportDate")) || fallbackDate,
+    platformName: String(read("pageName") || "").trim(),
+    morningOrders,
+    morningRevenue,
+    eveningOrders,
+    eveningRevenue,
+    totalOrders: morningOrders + eveningOrders,
+    totalRevenue: morningRevenue + eveningRevenue,
+    sourceFileId,
+    createdAt,
+    ocrConfidence: Object.keys(fieldWarnings).length ? 85 : 100,
+    ocrFieldWarnings: fieldWarnings,
+    ocrReviewStatus: Object.keys(fieldWarnings).length ? "needs_review" : "ok",
+    ocrReviewNotes: Object.keys(fieldWarnings).length ? "Excel totals mismatch. تم إعادة حساب الإجمالي من الصباحي والمسائي." : "Excel import"
+  };
+};
+
+const salesPersonFromRow = (
+  row: Record<string, unknown>,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string
+): SalesBySalesperson => {
+  const read = (field: keyof typeof salesAliases) => readAliased(row, salesAliases[field]);
+  const morningOrders = toNumber(read("morningOrders"));
+  const morningRevenue = toNumber(read("morningValue"));
+  const eveningOrders = toNumber(read("eveningOrders"));
+  const eveningRevenue = toNumber(read("eveningValue"));
+  const providedTotalOrders = toNumber(read("totalOrders"));
+  const providedTotalRevenue = toNumber(read("totalValue"));
+  const fieldWarnings = salesTotalWarnings(morningOrders, morningRevenue, eveningOrders, eveningRevenue, providedTotalOrders, providedTotalRevenue);
+  return {
+    id: createId(),
+    reportDate: normalizeExcelDate(read("reportDate")) || fallbackDate,
+    salespersonCode: String(read("salespersonCode") || "").trim(),
+    salespersonName: String(read("salespersonName") || "").trim(),
+    morningOrders,
+    morningRevenue,
+    eveningOrders,
+    eveningRevenue,
+    totalOrders: morningOrders + eveningOrders,
+    totalRevenue: morningRevenue + eveningRevenue,
+    sourceFileId,
+    createdAt,
+    ocrConfidence: Object.keys(fieldWarnings).length ? 85 : 100,
+    ocrFieldWarnings: fieldWarnings,
+    ocrReviewStatus: Object.keys(fieldWarnings).length ? "needs_review" : "ok",
+    ocrReviewNotes: Object.keys(fieldWarnings).length ? "Excel totals mismatch. تم إعادة حساب الإجمالي من الصباحي والمسائي." : "Excel import"
+  };
+};
+
+const salesTotalWarnings = (
+  morningOrders: number,
+  morningRevenue: number,
+  eveningOrders: number,
+  eveningRevenue: number,
+  providedTotalOrders: number,
+  providedTotalRevenue: number
+): OcrFieldWarnings => {
+  const warnings: OcrFieldWarnings = {};
+  if (providedTotalOrders && providedTotalOrders !== morningOrders + eveningOrders) {
+    warnings.totalOrders = ["إجمالي الطلبات في الملف لا يساوي صباحي + مسائي، وتم إعادة حسابه تلقائيًا"];
+  }
+  if (providedTotalRevenue && providedTotalRevenue !== morningRevenue + eveningRevenue) {
+    warnings.totalValue = ["إجمالي القيمة في الملف لا يساوي صباحي + مسائي، وتم إعادة حسابه تلقائيًا"];
+  }
+  return warnings;
+};
+
 export const parseAdsWorkbook = async (
   file: File,
   platform: AdsPlatform,
