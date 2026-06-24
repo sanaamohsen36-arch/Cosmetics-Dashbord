@@ -1,5 +1,5 @@
-import MonthlyDashboardWrapper from "../MonthlyDashboardWrapper";
+import DashboardApp from "../App";
 
 export default function Page() {
-  return <MonthlyDashboardWrapper />;
+  return <DashboardApp />;
 }

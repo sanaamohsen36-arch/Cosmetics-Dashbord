@@ -45,6 +45,7 @@ create table if not exists public.ads_raw_files (
   report_date date not null,
   ads_platform text not null,
   sales_platform_name text not null default 'غير محدد',
+  ad_account_name text not null default 'غير محدد',
   parsing_status text not null,
   created_at timestamptz not null default now()
 );
@@ -53,6 +54,7 @@ create table if not exists public.meta_ads (
   id text primary key,
   report_date date not null,
   sales_platform_name text not null default 'غير محدد',
+  ad_account_name text not null default 'غير محدد',
   campaign_name text not null,
   adset_name text not null default '',
   ad_name text not null default '',
@@ -64,6 +66,8 @@ create table if not exists public.meta_ads (
   cpc numeric not null default 0,
   cpm numeric not null default 0,
   leads integer not null default 0,
+  messages_count integer not null default 0,
+  comments_count integer not null default 0,
   purchases integer not null default 0,
   purchase_value numeric not null default 0,
   source_file_id text,
@@ -74,6 +78,7 @@ create table if not exists public.tiktok_ads (
   id text primary key,
   report_date date not null,
   sales_platform_name text not null default 'غير محدد',
+  ad_account_name text not null default 'غير محدد',
   campaign_name text not null,
   adgroup_name text not null default '',
   ad_name text not null default '',
@@ -83,6 +88,8 @@ create table if not exists public.tiktok_ads (
   ctr numeric not null default 0,
   cpc numeric not null default 0,
   cpm numeric not null default 0,
+  messages_count integer not null default 0,
+  comments_count integer not null default 0,
   conversions integer not null default 0,
   cost_per_conversion numeric not null default 0,
   revenue numeric not null default 0,
@@ -113,6 +120,14 @@ create table if not exists public.daily_summary (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.ads_raw_files add column if not exists ad_account_name text not null default 'غير محدد';
+alter table public.meta_ads add column if not exists ad_account_name text not null default 'غير محدد';
+alter table public.meta_ads add column if not exists messages_count integer not null default 0;
+alter table public.meta_ads add column if not exists comments_count integer not null default 0;
+alter table public.tiktok_ads add column if not exists ad_account_name text not null default 'غير محدد';
+alter table public.tiktok_ads add column if not exists messages_count integer not null default 0;
+alter table public.tiktok_ads add column if not exists comments_count integer not null default 0;
 
 alter table public.sales_raw_files enable row level security;
 alter table public.sales_by_salesperson enable row level security;

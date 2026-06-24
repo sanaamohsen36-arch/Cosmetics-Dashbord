@@ -5,6 +5,17 @@ export const inRange = (date: string, range: DateRange) => date >= range.from &&
 const sum = <T,>(rows: T[], picker: (row: T) => number) => rows.reduce((total, row) => total + picker(row), 0);
 const safeRatio = (top: number, bottom: number) => (bottom ? top / bottom : null);
 const safePercent = (top: number, bottom: number) => (bottom ? (top / bottom) * 100 : null);
+const normalizePlatformName = (name: string) =>
+  name
+    .replace(/[إأآ]/g, "ا")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+export const isSubtotalPlatformName = (name: string) => {
+  const normalized = normalizePlatformName(name);
+  return normalized === "اجمالي السوشيال" || normalized === "اجمالي اليوم";
+};
 
 export const getAllAdsRows = (data: AppData) => [...data.metaAds, ...data.tiktokAds];
 
@@ -12,7 +23,7 @@ export const filterPeople = (data: AppData, range: DateRange) =>
   data.salesBySalesperson.filter((row) => inRange(row.reportDate, range));
 
 export const filterPlatforms = (data: AppData, range: DateRange) =>
-  data.salesByPlatform.filter((row) => inRange(row.reportDate, range));
+  data.salesByPlatform.filter((row) => inRange(row.reportDate, range) && !isSubtotalPlatformName(row.platformName));
 
 export const filterAds = (data: AppData, range: DateRange) => getAllAdsRows(data).filter((row) => inRange(row.reportDate, range));
 
@@ -30,6 +41,8 @@ export const calculateKpis = (data: AppData, range: DateRange): Kpis => {
   const metaSpend = sum(ads.filter((row) => row.adsPlatform === "Meta"), (row) => row.spend);
   const tiktokSpend = sum(ads.filter((row) => row.adsPlatform === "TikTok"), (row) => row.spend);
   const totalAdsSpend = metaSpend + tiktokSpend;
+  const messagesCount = sum(ads, (row) => Number(row.messagesCount) || 0);
+  const commentsCount = sum(ads, (row) => Number(row.commentsCount) || 0);
 
   return {
     totalSalesRevenue,
@@ -41,6 +54,9 @@ export const calculateKpis = (data: AppData, range: DateRange): Kpis => {
     totalAdsSpend,
     metaSpend,
     tiktokSpend,
+    messagesCount,
+    commentsCount,
+    messageConversionRate: messagesCount ? safePercent(totalOrders, messagesCount) : 0,
     roas: safeRatio(totalSalesRevenue, totalAdsSpend),
     roi: safePercent(totalSalesRevenue - totalAdsSpend, totalAdsSpend),
     cpa: safeRatio(totalAdsSpend, totalOrders),
@@ -74,7 +90,7 @@ export const aggregatePeople = (rows: SalesBySalesperson[]) => {
 
 export const aggregatePlatforms = (rows: SalesByPlatform[]) => {
   const map = new Map<string, SalesByPlatform>();
-  for (const row of rows) {
+  for (const row of rows.filter((item) => !isSubtotalPlatformName(item.platformName))) {
     const key = row.platformName;
     const existing = map.get(key);
     if (!existing) {
