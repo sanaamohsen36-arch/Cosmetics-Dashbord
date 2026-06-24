@@ -53,11 +53,32 @@ import { createSampleSales, inferDateFromFileName, parseAdsWorkbook, parseSalesO
 
 const today = new Date().toISOString().slice(0, 10);
 const numberFormat = new Intl.NumberFormat("ar-EG");
+const latinNumberFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+const adUploadPlatforms = ["ريجينكس", "ريجينكس eg", "واتساب ريجينكس"];
+const chartTooltipStyle = { background: "#111827", border: "1px solid #263241", borderRadius: 8, color: "#e5edf5" };
 
 const money = (value: number | null) => (value === null ? "N/A" : `${numberFormat.format(Math.round(value))} ج`);
 const integer = (value: number | null) => (value === null ? "N/A" : numberFormat.format(Math.round(value)));
+const reviewTotal = (revenue: number, orders: number) => `${latinNumberFormat.format(Math.round(revenue))} / ${latinNumberFormat.format(Math.round(orders))} ج`;
 const ratio = (value: number | null) => (value === null ? "N/A" : value.toFixed(2));
 const percent = (value: number | null) => (value === null ? "N/A" : `${value.toFixed(1)}%`);
+const getAdsTotals = (rows: AdsRow[]) => ({
+  spend: rows.reduce((total, row) => total + row.spend, 0),
+  messages: rows.reduce((total, row) => total + (Number(row.messagesCount) || 0), 0),
+  comments: rows.reduce((total, row) => total + (Number(row.commentsCount) || 0), 0),
+  impressions: rows.reduce((total, row) => total + row.impressions, 0),
+  reach: rows.reduce((total, row) => total + row.reach, 0),
+  clicks: rows.reduce((total, row) => total + row.clicks, 0)
+});
+const normalizeSalesPlatform = (name: string) => {
+  const normalized = name.trim().toLowerCase().replace(/\s+/g, " ");
+  if (normalized.includes("eg")) return "ريجينكس eg";
+  if (normalized.includes("واتس")) return "واتساب ريجينكس";
+  if (normalized.includes("ريجينكس")) return "ريجينكس";
+  return normalized;
+};
+const relatedAdsForPlatform = (ads: AdsRow[], platformName: string) =>
+  ads.filter((ad) => normalizeSalesPlatform(ad.salesPlatformName) === normalizeSalesPlatform(platformName));
 
 const navItems: { key: PageKey; label: string; icon: ElementType }[] = [
   { key: "upload", label: "رفع البيانات", icon: UploadCloud },
@@ -76,6 +97,7 @@ export default function App() {
   const [range, setRange] = useState<DateRange>({ from: today, to: today });
   const [query, setQuery] = useState("");
   const [syncStatus, setSyncStatus] = useState("جاري تحميل البيانات...");
+  const [theme, setTheme] = useState<"dark" | "light">("dark");
 
   const refreshData = async () => {
     try {
@@ -95,6 +117,17 @@ export default function App() {
     return unsubscribe;
   }, []);
 
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("dashboard-theme");
+    if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    localStorage.setItem("dashboard-theme", next);
+  };
+
   const scopedPeople = useMemo(() => filterPeople(data, range), [data, range]);
   const scopedPlatforms = useMemo(() => filterPlatforms(data, range), [data, range]);
   const scopedAds = useMemo(() => filterAds(data, range), [data, range]);
@@ -113,7 +146,7 @@ export default function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${theme}`}>
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-mark">DR</span>
@@ -142,11 +175,32 @@ export default function App() {
             <h1>{navItems.find((item) => item.key === page)?.label}</h1>
             <p className="sync-status">{syncStatus}</p>
           </div>
-          <DateControls range={range} setRange={setRange} />
+          <div className="topbar-actions">
+            {(page === "upload" || page === "dashboard") && (
+              <DateControls range={range} setRange={setRange} />
+            )}
+            <button className="theme-toggle" onClick={toggleTheme}>{theme === "dark" ? "Light" : "Dark"}</button>
+          </div>
         </header>
 
         {page === "upload" && <UploadPage data={data} commitData={commitData} setRange={setRange} />}
-        {page === "dashboard" && <DashboardPage kpis={kpis} people={scopedPeople} platforms={scopedPlatforms} ads={scopedAds} />}
+        {page === "dashboard" && (
+          <>
+            <div className="panel wide">
+              <MonthSalesCalendar
+                month={range.from.slice(0, 7)}
+                selectedDate={range.from}
+                data={data}
+                onSelectDate={(date) => setRange({ from: date, to: date })}
+                onChangeMonth={(month) => {
+                  const nextDate = `${month}-01`;
+                  setRange({ from: nextDate, to: endOfMonth(nextDate) });
+                }}
+              />
+            </div>
+            <DashboardPage kpis={kpis} people={scopedPeople} platforms={scopedPlatforms} ads={scopedAds} />
+          </>
+        )}
         {page === "salespeople" && (
           <SalespeoplePage rows={aggregatePeople(scopedPeople)} totalOrders={kpis.totalOrders} totalRevenue={kpis.totalSalesRevenue} query={query} setQuery={setQuery} />
         )}
@@ -166,6 +220,9 @@ export default function App() {
 }
 
 function DateControls({ range, setRange }: { range: DateRange; setRange: (range: DateRange) => void }) {
+  const setDate = (date: string, edge: "from" | "to") => {
+    setRange({ ...range, [edge]: date });
+  };
   const setPreset = (preset: "day" | "week" | "month") => {
     const base = new Date(range.to || today);
     if (preset === "day") setRange({ from: base.toISOString().slice(0, 10), to: base.toISOString().slice(0, 10) });
@@ -188,17 +245,20 @@ function DateControls({ range, setRange }: { range: DateRange; setRange: (range:
       <button onClick={() => setPreset("month")}>شهر</button>
       <label>
         من
-        <input type="date" value={range.from} onChange={(event) => setRange({ ...range, from: event.target.value })} />
+        <input type="date" value={range.from} onChange={(event) => setDate(event.target.value, "from")} />
       </label>
       <label>
         إلى
-        <input type="date" value={range.to} onChange={(event) => setRange({ ...range, to: event.target.value })} />
+        <input type="date" value={range.to} onChange={(event) => setDate(event.target.value, "to")} />
       </label>
     </div>
   );
 }
 
 function UploadPage({ data, commitData, setRange }: { data: AppData; commitData: CommitData; setRange: (range: DateRange) => void }) {
+  const [uploadUnlocked, setUploadUnlocked] = useState(false);
+  const [uploadPassword, setUploadPassword] = useState("");
+  const [authMessage, setAuthMessage] = useState("اكتبي باسورد الرفع للمتابعة.");
   const [salesFile, setSalesFile] = useState<File | null>(null);
   const [salesDate, setSalesDate] = useState(today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
@@ -224,6 +284,28 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
     setSalesMode(existingSalesDate ? "replace" : "merge");
   }, [existingSalesDate, salesDate]);
 
+  const unlockUpload = async () => {
+    const response = await fetch("/api/upload-auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: uploadPassword })
+    });
+    const result = (await response.json()) as { ok: boolean };
+    setUploadUnlocked(result.ok);
+    setAuthMessage(result.ok ? "تم فتح صفحة الرفع." : "الباسورد غير صحيح.");
+  };
+
+  useEffect(() => {
+    void unlockUpload();
+  }, []);
+
+  const createManualSalesTemplate = () => ({
+    people: [blankPerson(salesDate, sourceFileId)],
+    platforms: data.platformSettings
+      .filter((item) => item.isActive)
+      .map((item) => normalizePlatform({ ...blankPlatform(salesDate, sourceFileId), platformName: item.platformName }))
+  });
+
   const runOcr = async () => {
     if (!salesFile) return;
     setOcrProgress("بدء OCR...");
@@ -231,12 +313,15 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
       const text = await runArabicOcr(salesFile, (message, progress) => setOcrProgress(`${message} ${progress}%`));
       setOcrText(text);
       const parsed = parseSalesOcrText(text, salesDate, sourceFileId);
-      setPeoplePreview(parsed.people);
-      setPlatformPreview(parsed.platforms);
+      const template = createManualSalesTemplate();
+      const people = parsed.people.length ? parsed.people : template.people;
+      const platforms = parsed.platforms.length ? parsed.platforms : template.platforms;
+      setPeoplePreview(people);
+      setPlatformPreview(platforms);
       setOcrProgress(
         parsed.people.length || parsed.platforms.length
-          ? "تم استخراج البيانات. راجع الجدول قبل الحفظ."
-          : "قراءة OCR غير موثوقة، فلم يتم ملء الجدول حتى لا تُحفظ بيانات غلط. استخدمي تحميل نموذج ثم عدلي الأرقام."
+          ? "تم استخراج أفضل قراءة ممكنة. راجعي الجدول وعدلي أي خلية قبل الحفظ."
+          : "لم يكتمل استخراج الجدول تلقائيًا، فتم فتح قالب يدوي منظم للصور و screenshots. اكتبي أو عدلي الأرقام ثم احفظي."
       );
     } catch (error) {
       setOcrProgress(error instanceof Error ? error.message : "تعذر تشغيل OCR");
@@ -245,9 +330,10 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
 
   const loadSample = () => {
     const sample = createSampleSales(salesDate, sourceFileId);
-    setPeoplePreview(sample.people);
-    setPlatformPreview(sample.platforms);
-    setOcrProgress("تم تحميل نموذج قابل للتعديل من شكل التقرير المرفق.");
+    const template = createManualSalesTemplate();
+    setPeoplePreview(sample.people.length ? sample.people : template.people);
+    setPlatformPreview(sample.platforms.length ? sample.platforms : template.platforms);
+    setOcrProgress(sample.people.length || sample.platforms.length ? "تم تحميل نموذج قابل للتعديل من شكل التقرير المرفق." : "تم تحميل قالب يدوي لليوم المختار.");
   };
 
   const saveSales = async () => {
@@ -256,6 +342,11 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
     const hasSalesValues = [...normalizedPeople, ...normalizedPlatforms].some((row) => row.totalOrders > 0 || row.totalRevenue > 0);
     if (!hasSalesValues) {
       setOcrProgress("لا يمكن حفظ تقرير فاضي. راجعي المعاينة أو اكتبي أرقام اليوم أولًا.");
+      return;
+    }
+    const blockingWarnings = [...normalizedPeople, ...normalizedPlatforms].flatMap((row) => severeOcrWarnings(row));
+    if (blockingWarnings.length) {
+      setOcrProgress("فيه خلايا OCR محتاجة مراجعة يدوية قبل الحفظ: " + blockingWarnings.slice(0, 3).join("، "));
       return;
     }
 
@@ -287,6 +378,29 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
     setRange({ from: date, to: date });
   };
 
+  if (!uploadUnlocked) {
+    return (
+      <section className="panel upload-panel">
+        <div className="section-title">
+          <UploadCloud />
+          <div>
+            <h2>صفحة الرفع محمية</h2>
+            <p>{authMessage}</p>
+          </div>
+        </div>
+        <div className="form-row">
+          <input
+            type="password"
+            placeholder="UPLOAD_PASSWORD"
+            value={uploadPassword}
+            onChange={(event) => setUploadPassword(event.target.value)}
+          />
+          <button className="primary" onClick={unlockUpload}>فتح الرفع</button>
+        </div>
+      </section>
+    );
+  }
+
   return (
     <section className="content-grid">
       <div className="panel wide">
@@ -312,8 +426,8 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
           </div>
         </div>
         <div className="upload-box">
-          <input type="file" accept="image/*" onChange={(event) => handleSalesFile(event.target.files?.[0] ?? null)} />
-          <span>{salesFile ? salesFile.name : "اختر صورة التقرير اليومي"}</span>
+          <input type="file" accept=".jpg,.jpeg,.png,image/jpeg,image/png,image/*" onChange={(event) => handleSalesFile(event.target.files?.[0] ?? null)} />
+          <span>{salesFile ? salesFile.name : "اختر صورة التقرير اليومي JPG أو screenshot"}</span>
         </div>
         <div className="form-row">
           <label>
@@ -348,11 +462,16 @@ function UploadPage({ data, commitData, setRange }: { data: AppData; commitData:
           <FileSpreadsheet />
           <div>
             <h2>رفع تقارير الإعلانات</h2>
-            <p>Excel من Meta أو TikTok مع معاينة وحفظ مستقل.</p>
+            <p>CSV/Excel من Meta أو TikTok، مقسم حسب صفحة المبيعات ويقبل أكثر من ملف لنفس اليوم.</p>
           </div>
         </div>
-        <AdsUpload platform="Meta" data={data} commitData={commitData} />
-        <AdsUpload platform="TikTok" data={data} commitData={commitData} />
+        {adUploadPlatforms.map((salesPlatformName) => (
+          <div className="ads-platform-group" key={salesPlatformName}>
+            <h3>{salesPlatformName}</h3>
+            <AdsUpload platform="Meta" salesPlatformName={salesPlatformName} data={data} commitData={commitData} />
+            <AdsUpload platform="TikTok" salesPlatformName={salesPlatformName} data={data} commitData={commitData} />
+          </div>
+        ))}
       </div>
 
       <div className="panel wide">
@@ -427,17 +546,29 @@ function MonthSalesCalendar({
   );
 }
 
-function AdsUpload({ platform, data, commitData }: { platform: AdsPlatform; data: AppData; commitData: CommitData }) {
+function AdsUpload({
+  platform,
+  salesPlatformName,
+  data,
+  commitData
+}: {
+  platform: AdsPlatform;
+  salesPlatformName: string;
+  data: AppData;
+  commitData: CommitData;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [reportDate, setReportDate] = useState(today);
-  const activePlatforms = data.platformSettings.filter((item) => item.isActive);
-  const [salesPlatformName, setSalesPlatformName] = useState(activePlatforms[0]?.platformName ?? "ريجينكس");
+  const [adAccountName, setAdAccountName] = useState("");
   const [rows, setRows] = useState<AdsRow[]>([]);
   const [message, setMessage] = useState("");
-  const [mode, setMode] = useState<UploadMode>("merge");
 
   const existing = data.adsRawFiles.some(
-    (item) => item.reportDate === reportDate && item.adsPlatform === platform && item.salesPlatformName === salesPlatformName
+    (item) =>
+      item.reportDate === reportDate &&
+      item.adsPlatform === platform &&
+      item.salesPlatformName === salesPlatformName &&
+      (item.adAccountName || "غير محدد") === (adAccountName || "غير محدد")
   );
 
   const handleFile = async (selected: File | null) => {
@@ -447,9 +578,12 @@ function AdsUpload({ platform, data, commitData }: { platform: AdsPlatform; data
     setReportDate(date);
     const sourceFileId = createId();
     try {
-      const parsed = await parseAdsWorkbook(selected, platform, salesPlatformName, date, sourceFileId);
+      const parsed = await parseAdsWorkbook(selected, platform, salesPlatformName, date, sourceFileId, adAccountName);
       setRows(parsed);
-      setMessage(`تمت قراءة ${parsed.length} صف من ${platform} لصفحة ${salesPlatformName}.`);
+      const totals = getAdsTotals(parsed);
+      setMessage(
+        `تمت قراءة ${parsed.length} صف. الصرف ${money(totals.spend)}، الرسائل ${integer(totals.messages)}، التعليقات ${integer(totals.comments)}.`
+      );
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "تعذر قراءة ملف الإعلانات");
     }
@@ -465,14 +599,15 @@ function AdsUpload({ platform, data, commitData }: { platform: AdsPlatform; data
       reportDate,
       adsPlatform: platform,
       salesPlatformName,
+      adAccountName: adAccountName || "غير محدد",
       parsingStatus: "success",
       createdAt: now
     };
-    const datedRows = rows.map((row) => ({ ...row, reportDate, salesPlatformName }));
+    const datedRows = rows.map((row) => ({ ...row, reportDate, salesPlatformName, adAccountName: adAccountName || row.adAccountName || "غير محدد" }));
     setMessage(`جاري حفظ بيانات ${platform} لصفحة ${salesPlatformName}...`);
-    const next = await saveAdsUpload(data, rawFile, datedRows, platform, existing ? mode : "merge");
+    const next = await saveAdsUpload(data, rawFile, datedRows, platform, "merge");
     await commitData(next);
-    setMessage(`تم حفظ بيانات ${platform} لصفحة ${salesPlatformName}.`);
+    setMessage(existing ? `تم دمج ملف جديد مع بيانات ${platform} لصفحة ${salesPlatformName}.` : `تم حفظ بيانات ${platform} لصفحة ${salesPlatformName}.`);
   };
 
   return (
@@ -481,24 +616,11 @@ function AdsUpload({ platform, data, commitData }: { platform: AdsPlatform; data
         <strong>{platform === "Meta" ? "Meta Ads" : "TikTok Ads"}</strong>
         <span>{rows.length ? `${rows.length} صف جاهز لصفحة ${salesPlatformName}` : "اختر الصفحة ثم ملف الإعلانات"}</span>
       </div>
-      <select value={salesPlatformName} onChange={(event) => setSalesPlatformName(event.target.value)}>
-        {activePlatforms.map((item) => (
-          <option key={item.id} value={item.platformName}>
-            {item.platformName}
-          </option>
-        ))}
-      </select>
+      <input placeholder="اسم حساب الإعلانات" value={adAccountName} onChange={(event) => setAdAccountName(event.target.value)} />
       <input type="file" accept=".xlsx,.xls,.csv" onChange={(event) => handleFile(event.target.files?.[0] ?? null)} />
       <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
-      {existing && (
-        <select value={mode} onChange={(event) => setMode(event.target.value as UploadMode)}>
-          <option value="replace">استبدال</option>
-          <option value="merge">دمج</option>
-          <option value="cancel">إلغاء</option>
-        </select>
-      )}
       <button disabled={!rows.length} onClick={save}>
-        حفظ
+        {existing ? "دمج" : "حفظ"}
       </button>
       {message && <small>{message}</small>}
     </div>
@@ -520,6 +642,8 @@ function DashboardPage({ kpis, people, platforms, ads }: { kpis: ReturnType<type
         <Kpi title="إجمالي المبيعات" value={money(kpis.totalSalesRevenue)} />
         <Kpi title="إجمالي الطلبات" value={integer(kpis.totalOrders)} />
         <Kpi title="مصروف الإعلانات" value={money(kpis.totalAdsSpend)} />
+        <Kpi title="إجمالي الرسائل اليومية" value={integer(kpis.messagesCount)} />
+        <Kpi title="نسبة المبيعات من الرسائل" value={percent(kpis.messageConversionRate ?? 0)} />
         <Kpi title="ROAS" value={ratio(kpis.roas)} />
         <Kpi title="ROI" value={percent(kpis.roi)} />
         <Kpi title="CPA" value={money(kpis.cpa)} />
@@ -532,11 +656,11 @@ function DashboardPage({ kpis, people, platforms, ads }: { kpis: ReturnType<type
       <div className="chart-grid">
         <ChartPanel title="اتجاه المبيعات والطلبات">
           <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={trend}>
+            <LineChart data={trend} margin={{ top: 12, right: 18, left: 8, bottom: 12 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#263241" />
-              <XAxis dataKey="date" stroke="#94a3b8" />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #263241" }} />
+              <XAxis dataKey="date" stroke="#94a3b8" tick={{ fontSize: 12 }} />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
+              <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
               <Line type="monotone" dataKey="revenue" name="المبيعات" stroke="#38bdf8" strokeWidth={3} />
               <Line type="monotone" dataKey="orders" name="الطلبات" stroke="#34d399" strokeWidth={3} />
             </LineChart>
@@ -544,11 +668,11 @@ function DashboardPage({ kpis, people, platforms, ads }: { kpis: ReturnType<type
         </ChartPanel>
         <ChartPanel title="مصروف الإعلانات و ROAS">
           <ResponsiveContainer width="100%" height={280}>
-            <LineChart data={trend}>
+            <LineChart data={trend} margin={{ top: 12, right: 18, left: 8, bottom: 12 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#263241" />
-              <XAxis dataKey="date" stroke="#94a3b8" />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #263241" }} />
+              <XAxis dataKey="date" stroke="#94a3b8" tick={{ fontSize: 12 }} />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
+              <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
               <Line type="monotone" dataKey="spend" name="المصروف" stroke="#f59e0b" strokeWidth={3} />
               <Line type="monotone" dataKey="roas" name="ROAS" stroke="#a78bfa" strokeWidth={3} />
             </LineChart>
@@ -556,11 +680,11 @@ function DashboardPage({ kpis, people, platforms, ads }: { kpis: ReturnType<type
         </ChartPanel>
         <ChartPanel title="صباحي مقابل مسائي">
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={shiftData}>
+            <BarChart data={shiftData} margin={{ top: 12, right: 18, left: 8, bottom: 12 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#263241" />
-              <XAxis dataKey="name" stroke="#94a3b8" />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #263241" }} />
+              <XAxis dataKey="name" stroke="#94a3b8" tick={{ fontSize: 12 }} />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
+              <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
               <Bar dataKey="orders" name="طلبات" fill="#22c55e" radius={[8, 8, 0, 0]} />
               <Bar dataKey="revenue" name="قيمة" fill="#0ea5e9" radius={[8, 8, 0, 0]} />
             </BarChart>
@@ -568,22 +692,22 @@ function DashboardPage({ kpis, people, platforms, ads }: { kpis: ReturnType<type
         </ChartPanel>
         <ChartPanel title="المبيعات حسب السيلز">
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={byPeople}>
+            <BarChart data={byPeople} margin={{ top: 12, right: 18, left: 8, bottom: 28 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#263241" />
-              <XAxis dataKey="salespersonName" stroke="#94a3b8" />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #263241" }} />
+              <XAxis dataKey="salespersonName" stroke="#94a3b8" tick={{ fontSize: 11 }} interval={0} angle={-18} textAnchor="end" height={52} />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
+              <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
               <Bar dataKey="totalRevenue" name="قيمة" fill="#38bdf8" radius={[8, 8, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartPanel>
         <ChartPanel title="الطلبات حسب الصفحات">
           <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={byPlatform}>
+            <BarChart data={byPlatform} margin={{ top: 12, right: 18, left: 8, bottom: 28 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#263241" />
-              <XAxis dataKey="platformName" stroke="#94a3b8" />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip contentStyle={{ background: "#111827", border: "1px solid #263241" }} />
+              <XAxis dataKey="platformName" stroke="#94a3b8" tick={{ fontSize: 11 }} interval={0} angle={-18} textAnchor="end" height={52} />
+              <YAxis stroke="#94a3b8" tick={{ fontSize: 12 }} width={70} />
+              <Tooltip contentStyle={chartTooltipStyle} labelStyle={{ color: "#bae6fd" }} />
               <Bar dataKey="totalOrders" name="طلبات" fill="#34d399" radius={[8, 8, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
@@ -606,7 +730,9 @@ function SalespeoplePage({
   query: string;
   setQuery: (value: string) => void;
 }) {
-  const filtered = rows.filter((row) => `${row.salespersonName} ${row.salespersonCode}`.includes(query));
+  const filtered = rows
+    .filter((row) => `${row.salespersonName} ${row.salespersonCode}`.includes(query))
+    .sort((a, b) => b.totalRevenue - a.totalRevenue);
   return (
     <section className="panel wide">
       <TableHeader title="أداء السيلز" query={query} setQuery={setQuery} onExport={() => exportCsv("salespeople.csv", filtered)} />
@@ -682,15 +808,20 @@ function PlatformsPage({
               <th>حصة الطلبات</th>
               <th>حصة القيمة</th>
               <th>مصروف مرتبط</th>
+              <th>الرسائل</th>
+              <th>الكومنتات</th>
+              <th>تحويل الرسائل</th>
               <th>ROAS للصفحة</th>
               <th>CPA للصفحة</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((row) => {
-              const relatedSpend = ads
-                .filter((ad) => ad.salesPlatformName === row.platformName)
-                .reduce((total, ad) => total + ad.spend, 0);
+              const relatedAds = relatedAdsForPlatform(ads, row.platformName);
+              const relatedSpend = relatedAds.reduce((total, ad) => total + ad.spend, 0);
+              const messages = relatedAds.reduce((total, ad) => total + (Number(ad.messagesCount) || 0), 0);
+              const comments = relatedAds.reduce((total, ad) => total + (Number(ad.commentsCount) || 0), 0);
+              const messageConversion = messages ? (row.totalOrders / messages) * 100 : 0;
               return (
                 <tr key={row.id}>
                   <td>{row.platformName}</td>
@@ -703,6 +834,9 @@ function PlatformsPage({
                   <td>{percent(totalOrders ? (row.totalOrders / totalOrders) * 100 : null)}</td>
                   <td>{percent(totalRevenue ? (row.totalRevenue / totalRevenue) * 100 : null)}</td>
                   <td>{money(relatedSpend)}</td>
+                  <td>{integer(messages)}</td>
+                  <td>{integer(comments)}</td>
+                  <td>{percent(messageConversion)}</td>
                   <td>{ratio(relatedSpend ? row.totalRevenue / relatedSpend : null)}</td>
                   <td>{money(row.totalOrders && relatedSpend ? relatedSpend / row.totalOrders : null)}</td>
                 </tr>
@@ -719,7 +853,20 @@ function AdsPage({ rows, platforms }: { rows: AdsRow[]; platforms: SalesByPlatfo
   const summary = useMemo(() => {
     const dates = new Map<
       string,
-      { date: string; salesPlatformName: string; metaSpend: number; tiktokSpend: number; totalSpend: number; sales: number; orders: number }
+      {
+        date: string;
+        salesPlatformName: string;
+        metaSpend: number;
+        tiktokSpend: number;
+        totalSpend: number;
+        messages: number;
+        comments: number;
+        impressions: number;
+        reach: number;
+        clicks: number;
+        sales: number;
+        orders: number;
+      }
     >();
     for (const ad of rows) {
       const key = `${ad.reportDate}-${ad.salesPlatformName}`;
@@ -729,22 +876,42 @@ function AdsPage({ rows, platforms }: { rows: AdsRow[]; platforms: SalesByPlatfo
         metaSpend: 0,
         tiktokSpend: 0,
         totalSpend: 0,
+        messages: 0,
+        comments: 0,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
         sales: 0,
         orders: 0
       };
       if (ad.adsPlatform === "Meta") item.metaSpend += ad.spend;
       if (ad.adsPlatform === "TikTok") item.tiktokSpend += ad.spend;
       item.totalSpend = item.metaSpend + item.tiktokSpend;
+      item.messages += Number(ad.messagesCount) || 0;
+      item.comments += Number(ad.commentsCount) || 0;
+      item.impressions += ad.impressions;
+      item.reach += ad.reach;
+      item.clicks += ad.clicks;
       dates.set(key, item);
     }
     for (const sale of platforms) {
-      const key = `${sale.reportDate}-${sale.platformName}`;
+      const matchedAdPlatform = [...dates.values()].find(
+        (item) =>
+          item.date === sale.reportDate &&
+          normalizeSalesPlatform(item.salesPlatformName) === normalizeSalesPlatform(sale.platformName)
+      )?.salesPlatformName;
+      const key = `${sale.reportDate}-${matchedAdPlatform ?? sale.platformName}`;
       const item = dates.get(key) ?? {
         date: sale.reportDate,
-        salesPlatformName: sale.platformName,
+        salesPlatformName: matchedAdPlatform ?? sale.platformName,
         metaSpend: 0,
         tiktokSpend: 0,
         totalSpend: 0,
+        messages: 0,
+        comments: 0,
+        impressions: 0,
+        reach: 0,
+        clicks: 0,
         sales: 0,
         orders: 0
       };
@@ -768,8 +935,14 @@ function AdsPage({ rows, platforms }: { rows: AdsRow[]; platforms: SalesByPlatfo
                 <th>Meta Spend</th>
                 <th>TikTok Spend</th>
                 <th>إجمالي المصروف</th>
+                <th>Messages</th>
+                <th>Comments</th>
+                <th>Impressions</th>
+                <th>Reach</th>
+                <th>Clicks</th>
                 <th>المبيعات</th>
                 <th>الطلبات</th>
+                <th>تحويل الرسائل</th>
                 <th>ROAS</th>
                 <th>ROI</th>
                 <th>CPA</th>
@@ -784,8 +957,14 @@ function AdsPage({ rows, platforms }: { rows: AdsRow[]; platforms: SalesByPlatfo
                   <td>{money(row.metaSpend)}</td>
                   <td>{money(row.tiktokSpend)}</td>
                   <td>{money(row.totalSpend)}</td>
+                  <td>{integer(row.messages)}</td>
+                  <td>{integer(row.comments)}</td>
+                  <td>{integer(row.impressions)}</td>
+                  <td>{integer(row.reach)}</td>
+                  <td>{integer(row.clicks)}</td>
                   <td>{money(row.sales)}</td>
                   <td>{integer(row.orders)}</td>
+                  <td>{percent(row.messages ? (row.orders / row.messages) * 100 : 0)}</td>
                   <td>{ratio(row.totalSpend ? row.sales / row.totalSpend : null)}</td>
                   <td>{percent(row.totalSpend ? ((row.sales - row.totalSpend) / row.totalSpend) * 100 : null)}</td>
                   <td>{money(row.orders ? row.totalSpend / row.orders : null)}</td>
@@ -805,10 +984,13 @@ function AdsPage({ rows, platforms }: { rows: AdsRow[]; platforms: SalesByPlatfo
                 <th>التاريخ</th>
                 <th>المنصة</th>
                 <th>صفحة المبيعات</th>
+                <th>حساب الإعلانات</th>
                 <th>الحملة</th>
                 <th>Ad set / Group</th>
                 <th>Ad</th>
                 <th>Spend</th>
+                <th>Messages</th>
+                <th>Comments</th>
                 <th>Impressions</th>
                 <th>Reach</th>
                 <th>Clicks</th>
@@ -826,10 +1008,13 @@ function AdsPage({ rows, platforms }: { rows: AdsRow[]; platforms: SalesByPlatfo
                   <td>{row.reportDate}</td>
                   <td><Badge text={row.adsPlatform} /></td>
                   <td>{row.salesPlatformName}</td>
+                  <td>{row.adAccountName || "غير محدد"}</td>
                   <td>{row.campaignName}</td>
                   <td>{row.adsetName}</td>
                   <td>{row.adName}</td>
                   <td>{money(row.spend)}</td>
+                  <td>{integer(row.messagesCount || 0)}</td>
+                  <td>{integer(row.commentsCount || 0)}</td>
                   <td>{integer(row.impressions)}</td>
                   <td>{integer(row.reach)}</td>
                   <td>{integer(row.clicks)}</td>
@@ -976,6 +1161,7 @@ function EditablePeopleTable({ rows, setRows }: { rows: SalesBySalesperson[]; se
       <table>
         <thead>
           <tr>
+            <th>الخلية</th>
             <th>الاسم</th>
             <th>الكود</th>
             <th>طلبات صباحي</th>
@@ -983,20 +1169,26 @@ function EditablePeopleTable({ rows, setRows }: { rows: SalesBySalesperson[]; se
             <th>طلبات مسائي</th>
             <th>قيمة مسائي</th>
             <th>الإجمالي</th>
+            <th>OCR</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.map((row) => {
+            const warnings = ocrWarningMessages(row);
+            return (
             <tr key={row.id} className={row.totalOrders <= 0 && row.totalRevenue <= 0 ? "suspicious" : ""}>
+              <td>{row.ocrCellImages?.name ? <img className="ocr-cell-image" src={row.ocrCellImages.name} alt="" /> : "-"}</td>
               <td><input value={row.salespersonName} onChange={(event) => update(row.id, "salespersonName", event.target.value)} /></td>
               <td><input value={row.salespersonCode} onChange={(event) => update(row.id, "salespersonCode", event.target.value)} /></td>
               <td><input type="number" value={row.morningOrders} onChange={(event) => update(row.id, "morningOrders", event.target.value)} /></td>
               <td><input type="number" value={row.morningRevenue} onChange={(event) => update(row.id, "morningRevenue", event.target.value)} /></td>
               <td><input type="number" value={row.eveningOrders} onChange={(event) => update(row.id, "eveningOrders", event.target.value)} /></td>
               <td><input type="number" value={row.eveningRevenue} onChange={(event) => update(row.id, "eveningRevenue", event.target.value)} /></td>
-              <td>{integer(row.totalOrders)} / {money(row.totalRevenue)}</td>
+              <td>{reviewTotal(row.totalRevenue, row.totalOrders)}</td>
+              <td className={warnings.length ? "ocr-warning-cell" : ""}>{row.ocrConfidence ? `${row.ocrConfidence}%` : "-"}{warnings.length ? <small>{warnings.join("، ")}</small> : null}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1012,25 +1204,32 @@ function EditablePlatformTable({ rows, setRows }: { rows: SalesByPlatform[]; set
       <table>
         <thead>
           <tr>
+            <th>الخلية</th>
             <th>الصفحة</th>
             <th>طلبات صباحي</th>
             <th>قيمة صباحي</th>
             <th>طلبات مسائي</th>
             <th>قيمة مسائي</th>
             <th>الإجمالي</th>
+            <th>OCR</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((row) => (
+          {rows.map((row) => {
+            const warnings = ocrWarningMessages(row);
+            return (
             <tr key={row.id} className={row.totalOrders <= 0 && row.totalRevenue <= 0 ? "suspicious" : ""}>
+              <td>{row.ocrCellImages?.name ? <img className="ocr-cell-image" src={row.ocrCellImages.name} alt="" /> : "-"}</td>
               <td><input value={row.platformName} onChange={(event) => update(row.id, "platformName", event.target.value)} /></td>
               <td><input type="number" value={row.morningOrders} onChange={(event) => update(row.id, "morningOrders", event.target.value)} /></td>
               <td><input type="number" value={row.morningRevenue} onChange={(event) => update(row.id, "morningRevenue", event.target.value)} /></td>
               <td><input type="number" value={row.eveningOrders} onChange={(event) => update(row.id, "eveningOrders", event.target.value)} /></td>
               <td><input type="number" value={row.eveningRevenue} onChange={(event) => update(row.id, "eveningRevenue", event.target.value)} /></td>
-              <td>{integer(row.totalOrders)} / {money(row.totalRevenue)}</td>
+              <td>{reviewTotal(row.totalRevenue, row.totalOrders)}</td>
+              <td className={warnings.length ? "ocr-warning-cell" : ""}>{row.ocrConfidence ? `${row.ocrConfidence}%` : "-"}{warnings.length ? <small>{warnings.join("، ")}</small> : null}</td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
@@ -1097,6 +1296,12 @@ const getSalesDaySummary = (data: AppData, date: string) => {
 };
 
 const numericField = (field: string) => /Orders|Revenue|spend|impressions|reach|clicks|ctr|cpc|cpm|leads|purchases|Value/.test(field);
+
+const ocrWarningMessages = (row: SalesBySalesperson | SalesByPlatform) =>
+  Object.values(row.ocrFieldWarnings ?? {}).flat();
+
+const severeOcrWarnings = (row: SalesBySalesperson | SalesByPlatform) =>
+  ocrWarningMessages(row).filter((message) => /منخفضة|رفضها|محتاجة مراجعة|غير رقمية/.test(message));
 
 const normalizePerson = (row: SalesBySalesperson): SalesBySalesperson => ({
   ...row,

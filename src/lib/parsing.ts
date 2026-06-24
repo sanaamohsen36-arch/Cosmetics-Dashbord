@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import Tesseract from "tesseract.js";
 import type { AdsPlatform, AdsRow, OcrFieldWarnings, SalesByPlatform, SalesBySalesperson } from "../types";
+import { extractFixedTemplateSales, type FixedTemplateData } from "./fixedTemplateOcr";
 import { isSubtotalPlatformName } from "./metrics";
 import { createId } from "./storage";
 
@@ -18,6 +19,7 @@ export interface OcrWord {
 export interface SalesOcrResult {
   text: string;
   words: OcrWord[];
+  fixedTemplate?: FixedTemplateData;
 }
 
 interface ParsedNumericCells {
@@ -103,6 +105,13 @@ const cleanText = (value: string) =>
 let latestSalesOcrResult: SalesOcrResult = { text: "", words: [] };
 
 export const runArabicOcr = async (file: File, onProgress: (message: string, progress: number) => void) => {
+  const fixedTemplate = await extractFixedTemplateSales(file, onProgress);
+  if (fixedTemplate && (fixedTemplate.people.length || fixedTemplate.platforms.length)) {
+    latestSalesOcrResult = { text: "fixed-template", words: [], fixedTemplate };
+    onProgress("تمت قراءة الخلايا بنظام fixed template", 100);
+    return latestSalesOcrResult.text;
+  }
+
   onProgress("تحسين الصورة قبل OCR", 5);
   const imageForOcr = await preprocessImageForOcr(file);
   const result = await Tesseract.recognize(imageForOcr, "ara+eng", {
@@ -186,6 +195,10 @@ export const parseSalesOcrText = (
 ): { people: SalesBySalesperson[]; platforms: SalesByPlatform[] } => {
   const now = new Date().toISOString();
   const result = typeof ocr === "string" ? latestSalesOcrResult : ocr;
+  if (result.fixedTemplate && (result.fixedTemplate.people.length || result.fixedTemplate.platforms.length)) {
+    return createRowsFromFixedTemplate(result.fixedTemplate, reportDate, sourceFileId, now);
+  }
+
   const words = result.words.filter((word) => word.text);
   const bounds = getWordBounds(words);
   const people = parseSalespersonGrid(words, bounds, reportDate, sourceFileId, now);
@@ -220,6 +233,51 @@ export const parseSalesOcrText = (
 
   return { people, platforms };
 };
+
+const createRowsFromFixedTemplate = (
+  fixedTemplate: FixedTemplateData,
+  reportDate: string,
+  sourceFileId: string,
+  createdAt: string
+): { people: SalesBySalesperson[]; platforms: SalesByPlatform[] } => ({
+  people: fixedTemplate.people.map((row) => ({
+    id: createId(),
+    reportDate,
+    salespersonName: row.name,
+    salespersonCode: row.code ?? "",
+    morningOrders: row.morningOrders,
+    morningRevenue: row.morningRevenue,
+    eveningOrders: row.eveningOrders,
+    eveningRevenue: row.eveningRevenue,
+    totalOrders: row.morningOrders + row.eveningOrders,
+    totalRevenue: row.morningRevenue + row.eveningRevenue,
+    sourceFileId,
+    createdAt,
+    ocrConfidence: row.confidence,
+    ocrFieldConfidence: row.fieldConfidence,
+    ocrFieldWarnings: row.fieldWarnings,
+    ocrCellImages: row.cellImages
+  })),
+  platforms: fixedTemplate.platforms
+    .filter((row) => !row.isSubtotal && !isSubtotalPlatformName(row.name))
+    .map((row) => ({
+      id: createId(),
+      reportDate,
+      platformName: row.name,
+      morningOrders: row.morningOrders,
+      morningRevenue: row.morningRevenue,
+      eveningOrders: row.eveningOrders,
+      eveningRevenue: row.eveningRevenue,
+      totalOrders: row.morningOrders + row.eveningOrders,
+      totalRevenue: row.morningRevenue + row.eveningRevenue,
+      sourceFileId,
+      createdAt,
+      ocrConfidence: row.confidence,
+      ocrFieldConfidence: row.fieldConfidence,
+      ocrFieldWarnings: row.fieldWarnings,
+      ocrCellImages: row.cellImages
+    }))
+});
 
 const createEmptyEditableSalesPreview = (
   reportDate: string,

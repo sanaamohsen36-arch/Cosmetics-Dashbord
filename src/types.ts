@@ -3,6 +3,7 @@ export type UploadMode = "replace" | "merge" | "cancel";
 export type PageKey = "upload" | "dashboard" | "salespeople" | "platforms" | "ads" | "settings";
 export type OcrFieldConfidence = Record<string, number>;
 export type OcrFieldWarnings = Record<string, string[]>;
+export type OcrCellImages = Record<string, string>;
 
 export interface SalesRawFile {
   id: string;
@@ -30,6 +31,7 @@ export interface SalesBySalesperson {
   ocrConfidence?: number;
   ocrFieldConfidence?: OcrFieldConfidence;
   ocrFieldWarnings?: OcrFieldWarnings;
+  ocrCellImages?: OcrCellImages;
 }
 
 export interface SalesByPlatform {
@@ -47,6 +49,7 @@ export interface SalesByPlatform {
   ocrConfidence?: number;
   ocrFieldConfidence?: OcrFieldConfidence;
   ocrFieldWarnings?: OcrFieldWarnings;
+  ocrCellImages?: OcrCellImages;
 }
 
 export interface AdsRawFile {

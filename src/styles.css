@@ -151,6 +151,19 @@ input[type="file"] {
   margin-bottom: 24px;
 }
 
+.topbar-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.theme-toggle {
+  min-width: 82px;
+  font-weight: 800;
+}
+
 .topbar h1,
 .section-title h2,
 .panel h2 {
@@ -399,10 +412,23 @@ input[type="file"] {
   border-radius: 8px;
   padding: 12px;
   display: grid;
-  grid-template-columns: 1.2fr 170px 1.6fr 150px 130px 90px;
+  grid-template-columns: 1.1fr 190px minmax(180px, 1.4fr) 150px 90px 1fr;
   align-items: center;
   gap: 10px;
   margin-bottom: 12px;
+}
+
+.ads-platform-group {
+  border: 1px solid #1f2a3b;
+  border-radius: 8px;
+  background: rgba(8, 13, 23, 0.28);
+  padding: 12px;
+  margin-top: 12px;
+}
+
+.ads-platform-group h3 {
+  margin: 0 0 10px;
+  font-size: 20px;
 }
 
 .ads-upload-card strong,
@@ -448,7 +474,12 @@ input[type="file"] {
 }
 
 .chart-panel {
-  min-height: 350px;
+  min-height: 370px;
+}
+
+.chart-panel h2 {
+  margin-bottom: 14px;
+  line-height: 1.3;
 }
 
 .table-header {
@@ -495,6 +526,30 @@ td input {
   min-width: 120px;
 }
 
+.ocr-cell-image {
+  display: block;
+  width: 96px;
+  max-height: 42px;
+  object-fit: contain;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #263241;
+}
+
+.ocr-warning-cell {
+  color: #fbbf24;
+  min-width: 180px;
+}
+
+.ocr-warning-cell small {
+  display: block;
+  margin-top: 4px;
+  color: #fca5a5;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: normal;
+}
+
 tr.suspicious td {
   background: rgba(245, 158, 11, 0.08);
 }
@@ -531,6 +586,93 @@ tr.suspicious td {
 
 .toggle-row input {
   width: auto;
+}
+
+.app-shell.light {
+  color: #0f172a;
+  background: #f4f7fb;
+}
+
+.app-shell.light .main {
+  background:
+    radial-gradient(circle at 80% 0%, rgba(14, 165, 233, 0.12), transparent 32rem),
+    #f4f7fb;
+}
+
+.app-shell.light .sidebar,
+.app-shell.light .panel,
+.app-shell.light .ads-platform-group,
+.app-shell.light .kpi-card,
+.app-shell.light .table-wrap,
+.app-shell.light .month-day,
+.app-shell.light .upload-box,
+.app-shell.light .monthly-drop,
+.app-shell.light .monthly-control-shell,
+.app-shell.light .monthly-control-summary span,
+.app-shell.light .monthly-preview div,
+.app-shell.light .toggle-row {
+  background: #ffffff;
+  border-color: #d8e1ec;
+  color: #0f172a;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.app-shell.light input,
+.app-shell.light select,
+.app-shell.light button {
+  background: #ffffff;
+  color: #0f172a;
+  border-color: #cbd5e1;
+}
+
+.app-shell.light .primary {
+  background: #0ea5e9;
+  color: #06131d;
+  border-color: #0284c7;
+}
+
+.app-shell.light .success {
+  background: #10b981;
+  color: #052e16;
+  border-color: #059669;
+}
+
+.app-shell.light .sidebar nav button.active {
+  background: #e0f2fe;
+  border-color: #38bdf8;
+}
+
+.app-shell.light th {
+  background: #eef4fb;
+  color: #0f172a;
+}
+
+.app-shell.light td,
+.app-shell.light .monthly-preview strong,
+.app-shell.light .monthly-preview span {
+  color: #1e293b;
+}
+
+.app-shell.light .brand small,
+.app-shell.light .eyebrow,
+.app-shell.light .section-title p,
+.app-shell.light .ads-upload-card span,
+.app-shell.light .ads-upload-card small,
+.app-shell.light .kpi-card span,
+.app-shell.light .month-day small,
+.app-shell.light .month-day em,
+.app-shell.light .day-name {
+  color: #64748b;
+}
+
+.app-shell.light .sync-status,
+.app-shell.light .status-line {
+  color: #0369a1;
+}
+
+.app-shell.light .month-day.uploaded {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.18), #ffffff);
+  border-color: rgba(16, 185, 129, 0.55);
 }
 
 @media (max-width: 1120px) {
