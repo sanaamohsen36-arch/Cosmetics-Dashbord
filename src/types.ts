@@ -40,6 +40,7 @@ export interface SalesBySalesperson {
 export interface SalesByPlatform {
   id: string;
   reportDate: string;
+  platformCategory?: string;
   platformName: string;
   morningOrders: number;
   morningRevenue: number;

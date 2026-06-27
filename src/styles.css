@@ -981,11 +981,16 @@ tr.suspicious td {
   }
 
   .content-grid,
-  .chart-grid {
+  .chart-grid,
+  .preview-two-tables {
     grid-template-columns: 1fr;
   }
 
   .kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .sales-total-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1025,7 +1030,8 @@ tr.suspicious td {
 
   .sidebar nav,
   .kpi-grid,
-  .month-grid {
+  .month-grid,
+  .sales-total-summary {
     grid-template-columns: 1fr;
   }
 }
@@ -1709,6 +1715,48 @@ tbody tr:hover td {
   gap: 14px;
 }
 
+.simple-preview {
+  display: grid;
+  gap: 16px;
+}
+
+.preview-two-tables {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.preview-two-tables h3 {
+  margin: 0 0 10px;
+}
+
+.sales-total-summary {
+  border: 1px solid #dbe5f1;
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  gap: 10px;
+  background: #f8fafc;
+}
+
+.sales-total-summary.warning {
+  border-color: #fbbf24;
+  background: #fffbeb;
+}
+
+.sales-total-summary.ok {
+  border-color: #bbf7d0;
+  background: #f0fdf4;
+}
+
+.sales-total-summary p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #b45309;
+  font-weight: 800;
+}
+
 .reconciliation-panel {
   border: 1px solid #dbe5f1;
   border-radius: 14px;
@@ -1838,6 +1886,25 @@ tr.review-auto td {
 .app-shell.dark .reconciliation-panel {
   background: #0a1320;
   border-color: #263241;
+}
+
+.app-shell.dark .sales-total-summary {
+  background: #0a1320;
+  border-color: #263241;
+}
+
+.app-shell.dark .sales-total-summary.warning {
+  background: rgba(146, 64, 14, 0.16);
+  border-color: #92400e;
+}
+
+.app-shell.dark .sales-total-summary.ok {
+  background: rgba(20, 83, 45, 0.16);
+  border-color: #14532d;
+}
+
+.app-shell.dark .sales-total-summary p {
+  color: #fbbf24;
 }
 
 .app-shell.dark .reconciliation-panel.error {

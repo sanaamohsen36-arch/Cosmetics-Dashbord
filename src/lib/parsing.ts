@@ -749,9 +749,14 @@ const aliases: Record<string, string[]> = {
 
 const salesAliases = {
   reportDate: ["report_date", "report date", "date", "التاريخ", "تاريخ التقرير"],
+  platformCategory: ["category", "section", "القسم"],
   pageName: ["page_name", "page name", "platform", "platform_name", "الصفحة", "اسم الصفحة", "البلاتفورم"],
   salespersonCode: ["salesperson_code", "salesperson code", "code", "كود السيلز", "الكود"],
   salespersonName: ["salesperson_name", "salesperson name", "name", "السيلز", "اسم السيلز", "الاسم"],
+  shift: ["shift", "الشيفت", "الفترة"],
+  orders: ["orders", "عدد الأوردرات", "عدد الاوردرات"],
+  value: ["value", "قيمة الأوردرات", "قيمة الاوردرات", "القيمة"],
+  averageOrder: ["average order", "متوسط الأوردر", "متوسط الاوردر"],
   morningOrders: ["morning_orders", "morning orders", "طلبات صباحي", "عدد صباحي", "صباحي - العدد", "صباحي - عدد الاوردرات"],
   morningValue: ["morning_value", "morning value", "morning_revenue", "قيمة صباحي", "صباحي - القيمة", "صباحي - قيمة الاوردرات"],
   eveningOrders: ["evening_orders", "evening orders", "طلبات مسائي", "عدد مسائي", "مسائي - العدد", "مسائي - عدد الاوردرات"],
@@ -776,6 +781,12 @@ export const parseSalesWorkbook = async (
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", raw: false });
+    const currentTemplate = parseShiftSalesTemplate(rows, fallbackDate, sourceFileId, now);
+    if (currentTemplate.people.length || currentTemplate.platforms.length) {
+      people.push(...currentTemplate.people);
+      platforms.push(...currentTemplate.platforms);
+      continue;
+    }
     const detectedSections = extractSalesSections(rows, sheetName);
 
     for (const section of detectedSections) {
@@ -792,6 +803,111 @@ export const parseSalesWorkbook = async (
     platforms: platforms.filter((row) => row.platformName || row.totalOrders || row.totalRevenue)
   };
 };
+
+const parseShiftSalesTemplate = (
+  rows: unknown[][],
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string
+): { people: SalesBySalesperson[]; platforms: SalesByPlatform[] } => {
+  for (let index = 0; index < rows.length; index += 1) {
+    const header = rows[index].map((cell) => String(cell ?? ""));
+    const normalized = header.map(normalizeHeader);
+    const salespersonIndex = findHeaderIndex(normalized, salesAliases.salespersonName);
+    const shiftIndex = findHeaderIndex(normalized, salesAliases.shift);
+    const categoryIndex = findHeaderIndex(normalized, salesAliases.platformCategory);
+    const pageIndex = findHeaderIndex(normalized, salesAliases.pageName);
+    if (salespersonIndex < 0 || shiftIndex < 0 || categoryIndex < 0 || pageIndex < 0) continue;
+
+    const salesOrdersIndex = findHeaderAfter(normalized, salesAliases.orders, shiftIndex, categoryIndex);
+    const salesValueIndex = findHeaderAfter(normalized, salesAliases.value, shiftIndex, categoryIndex);
+    const pageOrdersIndex = findHeaderAfter(normalized, salesAliases.orders, pageIndex, header.length);
+    const pageValueIndex = findHeaderAfter(normalized, salesAliases.value, pageIndex, header.length);
+    if (salesOrdersIndex < 0 || salesValueIndex < 0 || pageOrdersIndex < 0 || pageValueIndex < 0) continue;
+
+    const peopleMap = new Map<string, SalesBySalesperson>();
+    const platforms: SalesByPlatform[] = [];
+
+    for (const rowCells of rows.slice(index + 1)) {
+      const salespersonName = String(rowCells[salespersonIndex] ?? "").trim();
+      const shift = String(rowCells[shiftIndex] ?? "").trim();
+      const salesOrders = toNumber(rowCells[salesOrdersIndex]);
+      const salesValue = toNumber(rowCells[salesValueIndex]);
+      if (salespersonName && (shift || salesOrders || salesValue)) {
+        const key = normalizeLookupText(salespersonName);
+        const existing =
+          peopleMap.get(key) ??
+          {
+            id: createId(),
+            reportDate: fallbackDate,
+            salespersonName,
+            salespersonCode: "",
+            morningOrders: 0,
+            morningRevenue: 0,
+            eveningOrders: 0,
+            eveningRevenue: 0,
+            totalOrders: 0,
+            totalRevenue: 0,
+            sourceFileId,
+            createdAt,
+            ocrConfidence: 100,
+            ocrReviewStatus: "ok",
+            ocrReviewNotes: "Excel import"
+          };
+        if (isEveningShift(shift)) {
+          existing.eveningOrders += salesOrders;
+          existing.eveningRevenue += salesValue;
+        } else {
+          existing.morningOrders += salesOrders;
+          existing.morningRevenue += salesValue;
+        }
+        existing.totalOrders = existing.morningOrders + existing.eveningOrders;
+        existing.totalRevenue = existing.morningRevenue + existing.eveningRevenue;
+        peopleMap.set(key, existing);
+      }
+
+      const platformName = String(rowCells[pageIndex] ?? "").trim();
+      const platformCategory = String(rowCells[categoryIndex] ?? "").trim();
+      const pageOrders = toNumber(rowCells[pageOrdersIndex]);
+      const pageValue = toNumber(rowCells[pageValueIndex]);
+      if (platformName || pageOrders || pageValue) {
+        platforms.push({
+          id: createId(),
+          reportDate: fallbackDate,
+          platformCategory,
+          platformName,
+          morningOrders: pageOrders,
+          morningRevenue: pageValue,
+          eveningOrders: 0,
+          eveningRevenue: 0,
+          totalOrders: pageOrders,
+          totalRevenue: pageValue,
+          sourceFileId,
+          createdAt,
+          ocrConfidence: 100,
+          ocrReviewStatus: "ok",
+          ocrReviewNotes: "Excel import"
+        });
+      }
+    }
+
+    return {
+      people: [...peopleMap.values()],
+      platforms
+    };
+  }
+  return { people: [], platforms: [] };
+};
+
+const findHeaderAfter = (headers: string[], names: string[], startIndex: number, endIndex: number) => {
+  const normalizedNames = names.map(normalizeHeader);
+  for (let index = Math.max(0, startIndex + 1); index < Math.min(headers.length, endIndex); index += 1) {
+    if (normalizedNames.includes(headers[index])) return index;
+  }
+  return -1;
+};
+
+const isEveningShift = (value: string) => /مسائي|evening|night|pm/i.test(value);
 
 const extractSalesSections = (rows: unknown[][], sheetName: string): Array<{ type: SalesSection; rows: Record<string, unknown>[] }> => {
   const sideBySide = extractSideBySideSalesSections(rows);
