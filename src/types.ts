@@ -1,6 +1,8 @@
 export type AdsPlatform = "Meta" | "TikTok";
 export type UploadMode = "replace" | "merge" | "cancel";
-export type PageKey = "dashboard" | "upload" | "sales" | "ads" | "settings";
+export type PageKey = "dashboard" | "upload" | "sales-folder" | "ads-folder" | "reports" | "settings";
+export type SalesRowType = "normal" | "subtotal" | "grand_total";
+export type SalesGroupType = "social" | "follow_up" | "other";
 export type OcrFieldConfidence = Record<string, number>;
 export type OcrFieldWarnings = Record<string, string[]>;
 export type OcrCellImages = Record<string, string>;
@@ -41,6 +43,8 @@ export interface SalesByPlatform {
   id: string;
   reportDate: string;
   platformCategory?: string;
+  groupType?: SalesGroupType;
+  rowType?: SalesRowType;
   platformName: string;
   morningOrders: number;
   morningRevenue: number;
@@ -89,6 +93,8 @@ export interface AdsRow {
   cpc: number;
   cpm: number;
   leads: number;
+  resultsCount?: number;
+  costPerResult?: number;
   messagesCount?: number;
   commentsCount?: number;
   purchases: number;

@@ -400,14 +400,16 @@ export const saveAdsUpload = async (
               !(
                 file.reportDate === rawFile.reportDate &&
                 file.adsPlatform === platform &&
-                file.salesPlatformName === rawFile.salesPlatformName
+                file.salesPlatformName === rawFile.salesPlatformName &&
+                (file.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
               )
           ),
           [tableKey]: current[tableKey].filter(
             (row) =>
               !(
                 row.reportDate === rawFile.reportDate &&
-                row.salesPlatformName === rawFile.salesPlatformName
+                row.salesPlatformName === rawFile.salesPlatformName &&
+                (row.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
               )
           )
         }
@@ -430,6 +432,7 @@ export const saveAdsUpload = async (
         .eq("report_date", rawFile.reportDate)
         .eq("ads_platform", platform)
         .eq("sales_platform_name", rawFile.salesPlatformName)
+        .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
     );
 
     if (platform === "Meta") {
@@ -437,12 +440,14 @@ export const saveAdsUpload = async (
         query
           .eq("report_date", rawFile.reportDate)
           .eq("sales_platform_name", rawFile.salesPlatformName)
+          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
       );
     } else {
       await deleteWhere("tiktok_ads", (query) =>
         query
           .eq("report_date", rawFile.reportDate)
           .eq("sales_platform_name", rawFile.salesPlatformName)
+          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
       );
     }
   }
@@ -671,6 +676,8 @@ const fromAdsRow = (row: any, adsPlatform: AdsPlatform): AdsRow => ({
   cpc: Number(row.cpc) || 0,
   cpm: Number(row.cpm) || 0,
   leads: Number(row.leads ?? row.conversions) || 0,
+  resultsCount: Number(row.leads ?? row.conversions) || 0,
+  costPerResult: Number(row.cpc ?? row.cost_per_conversion) || 0,
   messagesCount: Number(row.messages_count) || 0,
   commentsCount: Number(row.comments_count) || 0,
   purchases: Number(row.purchases ?? row.conversions) || 0,

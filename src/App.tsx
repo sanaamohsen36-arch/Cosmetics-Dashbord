@@ -16,6 +16,7 @@ import {
 import {
   BarChart3,
   FileSpreadsheet,
+  FolderOpen,
   Gauge,
   LayoutDashboard,
   Save,
@@ -64,12 +65,15 @@ const integer = (value: number | null) => (value === null ? "N/A" : numberFormat
 const ratio = (value: number | null) => (value === null ? "N/A" : value.toFixed(2));
 const percent = (value: number | null) => (value === null ? "N/A" : `${value.toFixed(1)}%`);
 const chartTooltipStyle = { background: "#0b1422", border: "1px solid #253246", borderRadius: 8, color: "#e5edf5" };
+const brandOptions = ["ريجينكس", "ريجينكس eg", "واتساب ريجينكس"];
+const adsPlatformOptions = ["Facebook Ads", "Instagram Ads", "WhatsApp Ads", "TikTok Ads", "WhatsApp TikTok Ads", "Other"];
 
 const navItems: Array<{ key: PageKey; label: string; icon: ReactNode }> = [
   { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
   { key: "upload", label: "Upload Center", icon: <UploadCloud size={18} /> },
-  { key: "sales", label: "Sales Reports", icon: <Users size={18} /> },
-  { key: "ads", label: "Ads Reports", icon: <BarChart3 size={18} /> },
+  { key: "sales-folder", label: "Sales Folder", icon: <FolderOpen size={18} /> },
+  { key: "ads-folder", label: "Ads Folder", icon: <FolderOpen size={18} /> },
+  { key: "reports", label: "Reports", icon: <Users size={18} /> },
   { key: "settings", label: "Settings", icon: <Settings size={18} /> }
 ];
 
@@ -140,9 +144,10 @@ export default function DashboardApp() {
         </header>
 
         {page === "dashboard" && <DashboardPage data={data} range={range} />}
-        {page === "upload" && <UploadCenter data={data} setData={setData} />}
-        {page === "sales" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
-        {page === "ads" && <AdsReportsPage data={data} range={range} setRange={setRange} />}
+        {page === "upload" && <UploadCenter data={data} setPage={setPage} />}
+        {page === "sales-folder" && <SalesFolderPage data={data} setData={setData} />}
+        {page === "ads-folder" && <AdsFolderPage data={data} setData={setData} />}
+        {page === "reports" && <ReportsPage data={data} range={range} setRange={setRange} />}
         {page === "settings" && <SettingsPage data={data} commitData={commitData} />}
       </main>
     </div>
@@ -181,16 +186,33 @@ function DateFilters({
 
 function UploadCenter({
   data,
-  setData
+  setPage
 }: {
   data: AppData;
-  setData: (data: AppData) => void;
+  setPage: (page: PageKey) => void;
 }) {
   return (
     <div className="content-grid">
-      <SalesUploadCard data={data} setData={setData} />
-      <AdsUploadCard data={data} setData={setData} platform="Meta" />
-      <AdsUploadCard data={data} setData={setData} platform="TikTok" />
+      <section className="panel folder-card">
+        <div className="section-title">
+          <FolderOpen />
+          <div>
+            <h2>Sales / المبيعات</h2>
+            <p>Calendar folder: ملف مبيعات نهائي واحد لكل يوم مع Preview قبل الحفظ.</p>
+          </div>
+        </div>
+        <button className="primary" onClick={() => setPage("sales-folder")}>Open Sales Folder</button>
+      </section>
+      <section className="panel folder-card">
+        <div className="section-title">
+          <FolderOpen />
+          <div>
+            <h2>Ads / الإعلانات</h2>
+            <p>Brand folder: اختاري brand ثم اليوم ثم منصة الإعلان، مع أكثر من منصة في نفس اليوم.</p>
+          </div>
+        </div>
+        <button className="primary" onClick={() => setPage("ads-folder")}>Open Ads Folder</button>
+      </section>
       <RecentUploadsPanel data={data} />
       <section className="panel wide">
         <div className="section-title">
@@ -211,22 +233,162 @@ function UploadCenter({
   );
 }
 
-function SalesUploadCard({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
+function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
+  const [selectedDate, setSelectedDate] = useState(today);
+  const uploadedDates = new Set(data.salesRawFiles.map((file) => file.reportDate));
+  const existingFile = data.salesRawFiles.find((file) => file.reportDate === selectedDate);
+
+  return (
+    <div className="dashboard-stack">
+      <section className="panel">
+        <div className="section-title">
+          <FolderOpen />
+          <div>
+            <h2>Sales / المبيعات</h2>
+            <p>كل يوم له مساحة رفع مستقلة. المبيعات تسمح بملف نهائي واحد فقط لكل يوم.</p>
+          </div>
+        </div>
+        <CalendarMonth selectedDate={selectedDate} uploadedDates={uploadedDates} onSelect={setSelectedDate} />
+      </section>
+      <section className="panel">
+        <h2>ملف يوم {selectedDate}</h2>
+        {existingFile ? (
+          <div className="file-status-card dark-card">
+            <div>
+              <strong>{existingFile.fileName}</strong>
+              <small>{new Date(existingFile.uploadedAt).toLocaleString("ar-EG")}</small>
+            </div>
+            <Badge text="Saved" />
+          </div>
+        ) : (
+          <p className="status-line">لا يوجد ملف محفوظ لهذا اليوم.</p>
+        )}
+        <SalesUploadCard data={data} setData={setData} fixedDate={selectedDate} compact />
+      </section>
+    </div>
+  );
+}
+
+function AdsFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
+  const knownBrands = [...new Set([...brandOptions, ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)])];
+  const [brand, setBrand] = useState(knownBrands[0] || brandOptions[0]);
+  const [selectedDate, setSelectedDate] = useState(today);
+  const [platformName, setPlatformName] = useState(adsPlatformOptions[0]);
+  const uploadedDates = new Set(data.adsRawFiles.filter((file) => file.salesPlatformName === brand).map((file) => file.reportDate));
+  const filesForSelection = data.adsRawFiles.filter(
+    (file) => file.salesPlatformName === brand && file.reportDate === selectedDate && file.adAccountName === platformName
+  );
+
+  return (
+    <div className="dashboard-stack">
+      <section className="panel">
+        <div className="section-title">
+          <FolderOpen />
+          <div>
+            <h2>Ads / الإعلانات</h2>
+            <p>اختاري brand، ثم اليوم، ثم منصة الإعلان. الاستبدال يمس المنصة المختارة فقط.</p>
+          </div>
+        </div>
+        <div className="folder-tabs">
+          {knownBrands.map((item) => (
+            <button key={item} className={brand === item ? "primary" : ""} onClick={() => setBrand(item)}>{item}</button>
+          ))}
+        </div>
+      </section>
+      <section className="panel">
+        <h2>{brand}</h2>
+        <CalendarMonth selectedDate={selectedDate} uploadedDates={uploadedDates} onSelect={setSelectedDate} />
+      </section>
+      <section className="panel">
+        <div className="form-row">
+          <label>
+            Ads platform
+            <select value={platformName} onChange={(event) => setPlatformName(event.target.value)}>
+              {adsPlatformOptions.map((item) => <option key={item}>{item}</option>)}
+            </select>
+          </label>
+        </div>
+        {filesForSelection.length ? (
+          <div className="notice success-note">
+            <strong>Uploaded for {brand} / {selectedDate} / {platformName}</strong>
+            {filesForSelection.map((file) => <span key={file.id}>{file.fileName} - {new Date(file.uploadedAt).toLocaleString("ar-EG")}</span>)}
+          </div>
+        ) : (
+          <p className="status-line">لا توجد بيانات لهذه المنصة في اليوم المختار.</p>
+        )}
+        <AdsUploadCard data={data} setData={setData} platform={adsPlatformKind(platformName)} fixedDate={selectedDate} brandName={brand} selectedAdsPlatform={platformName} />
+      </section>
+    </div>
+  );
+}
+
+function CalendarMonth({
+  selectedDate,
+  uploadedDates,
+  onSelect
+}: {
+  selectedDate: string;
+  uploadedDates: Set<string>;
+  onSelect: (date: string) => void;
+}) {
+  const days = monthDays(selectedDate);
+  return (
+    <div className="folder-calendar">
+      {days.map((date) => {
+        const uploaded = uploadedDates.has(date);
+        return (
+          <button
+            key={date}
+            className={`folder-day ${selectedDate === date ? "selected" : ""} ${uploaded ? "uploaded" : "missing"}`}
+            onClick={() => onSelect(date)}
+          >
+            <strong>{new Date(`${date}T00:00:00`).getDate()}</strong>
+            <span>{date}</span>
+            <small>{uploaded ? "Uploaded" : "Empty"}</small>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReportsPage({ data, range, setRange }: { data: AppData; range: DateRange; setRange: (range: DateRange) => void }) {
+  return (
+    <div className="dashboard-stack">
+      <DateFilters range={range} mode="day" onRangeChange={setRange} onModeChange={(mode) => setRange(makePeriodRange(range.from, mode))} />
+      <SalesReportsPage data={data} range={range} setRange={setRange} hideFilters />
+      <AdsReportsPage data={data} range={range} setRange={setRange} hideFilters />
+    </div>
+  );
+}
+
+function SalesUploadCard({
+  data,
+  setData,
+  fixedDate,
+  compact = false
+}: {
+  data: AppData;
+  setData: (data: AppData) => void;
+  fixedDate?: string;
+  compact?: boolean;
+}) {
   const [file, setFile] = useState<File | null>(null);
-  const [reportDate, setReportDate] = useState(today);
+  const [reportDate, setReportDate] = useState(fixedDate || today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
   const [platformPreview, setPlatformPreview] = useState<SalesByPlatform[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const existing = data.salesBySalesperson.some((row) => row.reportDate === reportDate) || data.salesByPlatform.some((row) => row.reportDate === reportDate);
+  const activeDate = fixedDate || reportDate;
+  const existing = data.salesBySalesperson.some((row) => row.reportDate === activeDate) || data.salesByPlatform.some((row) => row.reportDate === activeDate);
   const totals = salesPreviewTotals(peoplePreview, platformPreview);
 
   const preview = async () => {
     if (!file) return;
     setMessage("جار قراءة الملف...");
     const sourceFileId = createId();
-    const parsed = await parseSalesWorkbook(file, reportDate, sourceFileId);
+    const parsed = await parseSalesWorkbook(file, activeDate, sourceFileId);
     setPeoplePreview(parsed.people);
     setPlatformPreview(parsed.platforms);
     setErrors(parsed.errors);
@@ -243,12 +405,12 @@ function SalesUploadCard({ data, setData }: { data: AppData; setData: (data: App
       fileName: file.name,
       filePath: file.name,
       uploadedAt: now,
-      reportDate,
+      reportDate: activeDate,
       ocrStatus: "success",
       createdAt: now
     };
-    const people = normalizePeopleRows(peoplePreview, reportDate, sourceFileId, now);
-    const platforms = normalizePlatformRows(platformPreview, reportDate, sourceFileId, now);
+    const people = normalizePeopleRows(peoplePreview, activeDate, sourceFileId, now);
+    const platforms = normalizePlatformRows(platformPreview, activeDate, sourceFileId, now);
     const enriched = syncMasterData(data, people, platforms);
     const next = await saveSalesUpload(enriched, rawFile, people, platforms, existing ? "replace" : "merge");
     setData(next);
@@ -277,7 +439,7 @@ function SalesUploadCard({ data, setData }: { data: AppData; setData: (data: App
           {peoplePreview.length || platformPreview.length ? (
             <button className="success" disabled={isSaving || errors.length > 0} onClick={save}>
               <Save size={18} />
-              {existing ? "Replace Existing Data" : "Save Data"}
+              {existing ? "Replace File" : "Save Data"}
             </button>
           ) : null}
         </div>
@@ -290,7 +452,9 @@ function SalesUploadCard({ data, setData }: { data: AppData; setData: (data: App
             <strong>إجماليات المعاينة</strong>
             <span>السيلز: {integer(totals.peopleOrders)} أوردر / {money(totals.peopleRevenue)}</span>
             <span>الصفحات: {integer(totals.platformOrders)} أوردر / {money(totals.platformRevenue)}</span>
+            {totals.grandOrders !== null || totals.grandRevenue !== null ? <span>إجمالي اليوم في الملف: {integer(totals.grandOrders)} أوردر / {money(totals.grandRevenue)}</span> : null}
             {totals.peopleOrders !== totals.platformOrders || totals.peopleRevenue !== totals.platformRevenue ? <span>تحذير: إجمالي السيلز لا يساوي إجمالي الصفحات.</span> : null}
+            {(totals.grandOrders !== null && totals.grandOrders !== totals.platformOrders) || (totals.grandRevenue !== null && totals.grandRevenue !== totals.platformRevenue) ? <span>تحذير: إجمالي الصفحات المحسوب لا يطابق إجمالي اليوم داخل الملف.</span> : null}
           </div>
           <EditablePeopleTable rows={peoplePreview} onChange={setPeoplePreview} />
           <EditablePlatformTable rows={platformPreview} onChange={setPlatformPreview} />
@@ -300,20 +464,41 @@ function SalesUploadCard({ data, setData }: { data: AppData; setData: (data: App
   );
 }
 
-function AdsUploadCard({ data, setData, platform }: { data: AppData; setData: (data: AppData) => void; platform: AdsPlatform }) {
+function AdsUploadCard({
+  data,
+  setData,
+  platform,
+  fixedDate,
+  brandName = "عام",
+  selectedAdsPlatform = platform
+}: {
+  data: AppData;
+  setData: (data: AppData) => void;
+  platform: AdsPlatform;
+  fixedDate?: string;
+  brandName?: string;
+  selectedAdsPlatform?: string;
+}) {
   const [file, setFile] = useState<File | null>(null);
-  const [reportDate, setReportDate] = useState(today);
+  const [reportDate, setReportDate] = useState(fixedDate || today);
   const [rows, setRows] = useState<AdsRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
-  const existing = data.adsRawFiles.some((raw) => raw.reportDate === reportDate && raw.adsPlatform === platform);
+  const activeDate = fixedDate || reportDate;
+  const existing = data.adsRawFiles.some(
+    (raw) =>
+      raw.reportDate === activeDate &&
+      raw.adsPlatform === platform &&
+      raw.salesPlatformName === brandName &&
+      (raw.adAccountName || "غير محدد") === selectedAdsPlatform
+  );
 
   const preview = async () => {
     if (!file) return;
     setMessage("جار قراءة ملف الإعلانات...");
-    const parsed = await parseAdsWorkbook(file, platform, reportDate, createId());
-    setRows(parsed.rows);
+    const parsed = await parseAdsWorkbook(file, platform, activeDate, createId());
+    setRows(parsed.rows.map((row) => ({ ...row, salesPlatformName: brandName, adAccountName: selectedAdsPlatform })));
     setErrors(parsed.errors);
     setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
   };
@@ -328,21 +513,24 @@ function AdsUploadCard({ data, setData, platform }: { data: AppData; setData: (d
       fileName: file.name,
       filePath: file.name,
       uploadedAt: now,
-      reportDate,
+      reportDate: activeDate,
       adsPlatform: platform,
-      salesPlatformName: "عام",
-      adAccountName: "غير محدد",
+      salesPlatformName: brandName,
+      adAccountName: selectedAdsPlatform,
       parsingStatus: "success",
       createdAt: now
     };
     const normalizedRows = rows.map((row) => ({
       ...row,
       id: createId(),
-      reportDate,
+      reportDate: activeDate,
       adsPlatform: platform,
       sourceFileId,
       createdAt: now,
-      salesPlatformName: row.salesPlatformName || "عام"
+      salesPlatformName: brandName,
+      adAccountName: selectedAdsPlatform,
+      leads: Number(row.resultsCount) || row.leads || row.purchases || 0,
+      cpc: Number(row.costPerResult) || row.cpc || 0
     }));
     const next = await saveAdsUpload(data, rawFile, normalizedRows, platform, existing ? "replace" : "merge");
     setData(next);
@@ -356,22 +544,24 @@ function AdsUploadCard({ data, setData, platform }: { data: AppData; setData: (d
       <div className="section-title">
         <FileSpreadsheet />
         <div>
-          <h2>{platform} Ads Upload</h2>
-          <p>Excel / CSV مع معاينة قبل الحفظ.</p>
+          <h2>{selectedAdsPlatform} Upload</h2>
+          <p>{brandName} / {activeDate} - Excel أو CSV مع معاينة قبل الحفظ.</p>
         </div>
       </div>
       <div className="upload-box">
         <input accept=".xlsx,.xls,.csv" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-        <label>
-          Select Report Date
-          <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
-        </label>
+        {!fixedDate && (
+          <label>
+            Select Report Date
+            <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
+          </label>
+        )}
         <div className="actions">
           <button className="primary" disabled={!file} onClick={preview}>Preview</button>
           {rows.length > 0 ? (
             <button className="success" disabled={isSaving || errors.length > 0} onClick={save}>
               <Save size={18} />
-              {existing ? `Replace Existing ${platform} Data` : `Save ${platform} Data`}
+              {existing ? "Replace Existing Platform Data" : "Save Platform Data"}
             </button>
           ) : null}
         </div>
@@ -386,12 +576,16 @@ function AdsUploadCard({ data, setData, platform }: { data: AppData; setData: (d
 function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
   const [salesperson, setSalesperson] = useState("all");
   const [platform, setPlatform] = useState("all");
-  const [adsPlatform, setAdsPlatform] = useState<"All" | AdsPlatform>("All");
-  const scopedData = useMemo(() => scopeData(data, range, salesperson, platform, adsPlatform), [data, range, salesperson, platform, adsPlatform]);
+  const [brand, setBrand] = useState("all");
+  const [adsPlatform, setAdsPlatform] = useState("all");
+  const scopedData = useMemo(() => scopeData(data, range, salesperson, platform, brand, adsPlatform), [data, range, salesperson, platform, brand, adsPlatform]);
   const kpis = useMemo(() => calculateKpis(scopedData, range), [scopedData, range]);
+  const resultCount = useMemo(() => filterAds(scopedData, range).reduce((sum, row) => sum + (Number(row.resultsCount) || Number(row.leads) || Number(row.purchases) || 0), 0), [scopedData, range]);
+  const costPerResult = resultCount ? kpis.totalAdsSpend / resultCount : null;
   const trend = useMemo(() => dailyTrend(filterPeople(scopedData, range), filterAds(scopedData, range)), [scopedData, range]);
   const people = useMemo(() => aggregatePeople(filterPeople(scopedData, range)), [scopedData, range]);
   const platforms = useMemo(() => aggregatePlatforms(filterPlatforms(scopedData, range)), [scopedData, range]);
+  const adsPlatformChart = useMemo(() => aggregateAdsByPlatform(filterAds(scopedData, range)), [scopedData, range]);
 
   return (
     <div className="dashboard-stack">
@@ -413,10 +607,16 @@ function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
           </label>
           <label>
             Ads platform
-            <select value={adsPlatform} onChange={(event) => setAdsPlatform(event.target.value as "All" | AdsPlatform)}>
-              <option value="All">All</option>
-              <option value="Meta">Meta</option>
-              <option value="TikTok">TikTok</option>
+            <select value={adsPlatform} onChange={(event) => setAdsPlatform(event.target.value)}>
+              <option value="all">All</option>
+              {[...new Set([...adsPlatformOptions, ...data.adsRawFiles.map((file) => file.adAccountName || "").filter(Boolean)])].map((name) => <option key={name}>{name}</option>)}
+            </select>
+          </label>
+          <label>
+            Brand
+            <select value={brand} onChange={(event) => setBrand(event.target.value)}>
+              <option value="all">All</option>
+              {[...new Set([...brandOptions, ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)])].map((name) => <option key={name}>{name}</option>)}
             </select>
           </label>
         </div>
@@ -434,8 +634,10 @@ function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
         <KpiCard label="ROAS" value={ratio(kpis.roas)} />
         <KpiCard label="ROI" value={percent(kpis.roi)} />
         <KpiCard label="CPA" value={money(kpis.cpa)} />
+        <KpiCard label="Messages" value={integer(kpis.messagesCount)} />
+        <KpiCard label="Comments" value={integer(kpis.commentsCount)} />
+        <KpiCard label="Cost per result" value={money(costPerResult)} />
         <KpiCard label="Average Order Value" value={money(kpis.averageOrderValue)} />
-        <KpiCard label="Spend to Sales Ratio" value={percent(kpis.spendToSalesRatio)} />
       </section>
       <section className="content-grid">
         <ChartPanel title="Sales + Orders Trend">
@@ -459,6 +661,39 @@ function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
               <Tooltip contentStyle={chartTooltipStyle} />
               <Bar dataKey="spend" fill="#0ea5e9" radius={[8, 8, 0, 0]} />
               <Bar dataKey="roas" fill="#34d399" radius={[8, 8, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+        <ChartPanel title="Spend by platform">
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={adsPlatformChart}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2a3b" />
+              <XAxis dataKey="platform" stroke="#94a3b8" />
+              <YAxis stroke="#94a3b8" />
+              <Tooltip contentStyle={chartTooltipStyle} />
+              <Bar dataKey="spend" fill="#0ea5e9" radius={[8, 8, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+        <ChartPanel title="Sales by platform">
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={platforms.slice(0, 8)}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2a3b" />
+              <XAxis dataKey="platformName" stroke="#94a3b8" />
+              <YAxis stroke="#94a3b8" />
+              <Tooltip contentStyle={chartTooltipStyle} />
+              <Bar dataKey="totalRevenue" fill="#34d399" radius={[8, 8, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+        <ChartPanel title="Salesperson ranking">
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={people.slice(0, 8)}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2a3b" />
+              <XAxis dataKey="salespersonName" stroke="#94a3b8" />
+              <YAxis stroke="#94a3b8" />
+              <Tooltip contentStyle={chartTooltipStyle} />
+              <Bar dataKey="totalRevenue" fill="#38bdf8" radius={[8, 8, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </ChartPanel>
@@ -487,7 +722,7 @@ function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
   );
 }
 
-function SalesReportsPage({ data, range, setRange }: { data: AppData; range: DateRange; setRange: (range: DateRange) => void }) {
+function SalesReportsPage({ data, range, setRange, hideFilters = false }: { data: AppData; range: DateRange; setRange: (range: DateRange) => void; hideFilters?: boolean }) {
   const people = aggregatePeople(filterPeople(data, range));
   const platforms = aggregatePlatforms(filterPlatforms(data, range));
   const totals = {
@@ -498,7 +733,7 @@ function SalesReportsPage({ data, range, setRange }: { data: AppData; range: Dat
 
   return (
     <div className="dashboard-stack">
-      <DateFilters range={range} mode="day" onRangeChange={setRange} onModeChange={(mode) => setRange(makePeriodRange(range.from, mode))} />
+      {!hideFilters && <DateFilters range={range} mode="day" onRangeChange={setRange} onModeChange={(mode) => setRange(makePeriodRange(range.from, mode))} />}
       <SimpleTable title="Sales by Salesperson" headers={["Rank", "Salesperson", "Code", "Morning Orders", "Morning Revenue", "Evening Orders", "Evening Revenue", "Total Orders", "Total Revenue", "Order Share", "Revenue Share", "AOV"]}>
         {people.map((row, index) => (
           <tr key={row.id}>
@@ -549,14 +784,40 @@ function SalesReportsPage({ data, range, setRange }: { data: AppData; range: Dat
   );
 }
 
-function AdsReportsPage({ data, range, setRange }: { data: AppData; range: DateRange; setRange: (range: DateRange) => void }) {
+function AdsReportsPage({ data, range, setRange, hideFilters = false }: { data: AppData; range: DateRange; setRange: (range: DateRange) => void; hideFilters?: boolean }) {
   const meta = data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to);
   const tiktok = data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to);
   const combined = aggregateAdsByDate([...meta, ...tiktok]);
+  const byBrand = aggregateAdsByBrand([...meta, ...tiktok]);
+  const byPlatform = aggregateAdsByPlatform([...meta, ...tiktok]);
 
   return (
     <div className="dashboard-stack">
-      <DateFilters range={range} mode="day" onRangeChange={setRange} onModeChange={(mode) => setRange(makePeriodRange(range.from, mode))} />
+      {!hideFilters && <DateFilters range={range} mode="day" onRangeChange={setRange} onModeChange={(mode) => setRange(makePeriodRange(range.from, mode))} />}
+      <SimpleTable title="Ads by brand" headers={["Brand", "Spend", "Messages", "Comments", "Results", "Cost / Result"]}>
+        {byBrand.map((row) => (
+          <tr key={row.brand}>
+            <td>{row.brand}</td>
+            <td>{money(row.spend)}</td>
+            <td>{integer(row.messages)}</td>
+            <td>{integer(row.comments)}</td>
+            <td>{integer(row.results)}</td>
+            <td>{money(row.results ? row.spend / row.results : null)}</td>
+          </tr>
+        ))}
+      </SimpleTable>
+      <SimpleTable title="Ads by platform" headers={["Platform", "Spend", "Messages", "Comments", "Results", "Cost / Result"]}>
+        {byPlatform.map((row) => (
+          <tr key={row.platform}>
+            <td>{row.platform}</td>
+            <td>{money(row.spend)}</td>
+            <td>{integer(row.messages)}</td>
+            <td>{integer(row.comments)}</td>
+            <td>{integer(row.results)}</td>
+            <td>{money(row.results ? row.spend / row.results : null)}</td>
+          </tr>
+        ))}
+      </SimpleTable>
       <SimpleTable title="Meta Ads" headers={["Date", "Campaign", "Ad set", "Ad", "Spend", "Impressions", "Reach", "Clicks", "CTR", "CPC", "CPM", "Leads", "Purchases", "Purchase value"]}>
         {meta.map((row) => <AdsRowView key={row.id} row={row} meta />)}
       </SimpleTable>
@@ -669,10 +930,12 @@ function EditablePeopleTable({ rows, onChange }: { rows: SalesBySalesperson[]; o
 
 function EditablePlatformTable({ rows, onChange }: { rows: SalesByPlatform[]; onChange: (rows: SalesByPlatform[]) => void }) {
   return (
-    <SimpleTable title="Preview: Pages / Platforms" headers={["Page", "Morning Orders", "Morning Value", "Evening Orders", "Evening Value", "Total Orders", "Total Value"]}>
+    <SimpleTable title="Preview: Pages / Platforms" headers={["Page", "Group", "Row type", "Morning Orders", "Morning Value", "Evening Orders", "Evening Value", "Total Orders", "Total Value"]}>
       {rows.map((row, index) => (
         <EditableRow key={row.id} row={row} index={index} onChange={onChange} rows={rows} fields={[
           ["platformName", "text"],
+          ["groupType", "text"],
+          ["rowType", "text"],
           ["morningOrders", "number"],
           ["morningRevenue", "number"],
           ["eveningOrders", "number"],
@@ -688,8 +951,8 @@ function EditablePlatformTable({ rows, onChange }: { rows: SalesByPlatform[]; on
 function EditableAdsTable({ platform, rows, onChange }: { platform: AdsPlatform; rows: AdsRow[]; onChange: (rows: AdsRow[]) => void }) {
   const headers =
     platform === "Meta"
-      ? ["Campaign", "Ad set", "Ad", "Spend", "Impressions", "Reach", "Clicks", "CTR", "CPC", "CPM", "Leads", "Purchases", "Purchase value"]
-      : ["Campaign", "Ad group", "Ad", "Spend", "Impressions", "Clicks", "CTR", "CPC", "CPM", "Conversions", "Cost / Conversion", "Revenue"];
+      ? ["Campaign", "Ad set", "Ad", "Spend", "Messages", "Comments", "Results", "Cost / Result", "Impressions", "Reach", "Clicks", "CTR", "CPC", "CPM"]
+      : ["Campaign", "Ad group", "Ad", "Spend", "Messages", "Comments", "Results", "Cost / Result", "Impressions", "Clicks", "CTR", "CPC", "CPM"];
   return (
     <SimpleTable title={`Preview: ${platform} Ads`} headers={headers}>
       {rows.map((row, index) => {
@@ -702,6 +965,10 @@ function EditableAdsTable({ platform, rows, onChange }: { platform: AdsPlatform;
             <td><input value={row.adsetName} onChange={(event) => update("adsetName", event.target.value)} /></td>
             <td><input value={row.adName} onChange={(event) => update("adName", event.target.value)} /></td>
             <td><input type="number" value={row.spend} onChange={(event) => update("spend", event.target.value)} /></td>
+            <td><input type="number" value={row.messagesCount ?? 0} onChange={(event) => update("messagesCount", event.target.value)} /></td>
+            <td><input type="number" value={row.commentsCount ?? 0} onChange={(event) => update("commentsCount", event.target.value)} /></td>
+            <td><input type="number" value={row.resultsCount ?? 0} onChange={(event) => update("resultsCount", event.target.value)} /></td>
+            <td><input type="number" value={row.costPerResult ?? 0} onChange={(event) => update("costPerResult", event.target.value)} /></td>
             <td><input type="number" value={row.impressions} onChange={(event) => update("impressions", event.target.value)} /></td>
             {platform === "Meta" && <td><input type="number" value={row.reach} onChange={(event) => update("reach", event.target.value)} /></td>}
             <td><input type="number" value={row.clicks} onChange={(event) => update("clicks", event.target.value)} /></td>
@@ -748,7 +1015,7 @@ function EditableRow<T extends SalesBySalesperson | SalesByPlatform>({
 function RecentUploadsPanel({ data }: { data: AppData }) {
   const rows = [
     ...data.salesRawFiles.map((file) => ({ date: file.reportDate, type: "Sales", name: file.fileName, status: file.ocrStatus, uploadedAt: file.uploadedAt })),
-    ...data.adsRawFiles.map((file) => ({ date: file.reportDate, type: file.adsPlatform, name: file.fileName, status: file.parsingStatus, uploadedAt: file.uploadedAt }))
+    ...data.adsRawFiles.map((file) => ({ date: file.reportDate, type: `${file.salesPlatformName} / ${file.adAccountName || file.adsPlatform}`, name: file.fileName, status: file.parsingStatus, uploadedAt: file.uploadedAt }))
   ].sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt));
   return (
     <SimpleTable title="Recent Uploads" headers={["Date", "Type", "File", "Status", "Upload Time"]}>
@@ -833,13 +1100,15 @@ function Badge({ text }: { text: string }) {
   return <span className="badge">{text}</span>;
 }
 
-const numericAdsFields = new Set<keyof AdsRow>(["spend", "impressions", "reach", "clicks", "ctr", "cpc", "cpm", "leads", "purchases", "purchaseValue"]);
+const numericAdsFields = new Set<keyof AdsRow>(["spend", "impressions", "reach", "clicks", "ctr", "cpc", "cpm", "leads", "purchases", "purchaseValue", "messagesCount", "commentsCount", "resultsCount", "costPerResult"]);
 
 const salesPreviewTotals = (people: SalesBySalesperson[], platforms: SalesByPlatform[]) => ({
   peopleOrders: people.reduce((sum, row) => sum + row.totalOrders, 0),
   peopleRevenue: people.reduce((sum, row) => sum + row.totalRevenue, 0),
-  platformOrders: platforms.reduce((sum, row) => sum + row.totalOrders, 0),
-  platformRevenue: platforms.reduce((sum, row) => sum + row.totalRevenue, 0)
+  platformOrders: normalSalesPlatforms(platforms).reduce((sum, row) => sum + row.totalOrders, 0),
+  platformRevenue: normalSalesPlatforms(platforms).reduce((sum, row) => sum + row.totalRevenue, 0),
+  grandOrders: platforms.find((row) => row.rowType === "grand_total")?.totalOrders ?? null,
+  grandRevenue: platforms.find((row) => row.rowType === "grand_total")?.totalRevenue ?? null
 });
 
 const normalizePeopleRows = (rows: SalesBySalesperson[], reportDate: string, sourceFileId: string, createdAt: string) =>
@@ -856,7 +1125,7 @@ const normalizePeopleRows = (rows: SalesBySalesperson[], reportDate: string, sou
     }));
 
 const normalizePlatformRows = (rows: SalesByPlatform[], reportDate: string, sourceFileId: string, createdAt: string) =>
-  rows
+  normalSalesPlatforms(rows)
     .filter((row) => row.platformName || row.totalOrders || row.totalRevenue)
     .map((row) => ({
       ...row,
@@ -910,13 +1179,56 @@ const syncMasterData = (data: AppData, people: SalesBySalesperson[], platforms: 
   };
 };
 
-const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, adsPlatform: "All" | AdsPlatform): AppData => ({
+const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brand: string, adsPlatform: string): AppData => ({
   ...data,
   salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson)),
   salesByPlatform: data.salesByPlatform.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (platform === "all" || row.platformName === platform)),
-  metaAds: adsPlatform === "TikTok" ? [] : data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to),
-  tiktokAds: adsPlatform === "Meta" ? [] : data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to)
+  metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform)),
+  tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform))
 });
+
+const normalSalesPlatforms = (rows: SalesByPlatform[]) =>
+  rows.filter((row) => (row.rowType ?? (isTotalName(row.platformName) ? "subtotal" : "normal")) === "normal");
+
+const isTotalName = (name: string) => /اجمالي|إجمالي|total/i.test(name);
+
+const aggregateAdsByBrand = (rows: AdsRow[]) => {
+  const map = new Map<string, { brand: string; spend: number; messages: number; comments: number; results: number }>();
+  for (const row of rows) {
+    const brand = row.salesPlatformName || "عام";
+    const item = map.get(brand) ?? { brand, spend: 0, messages: 0, comments: 0, results: 0 };
+    item.spend += row.spend;
+    item.messages += Number(row.messagesCount) || 0;
+    item.comments += Number(row.commentsCount) || 0;
+    item.results += Number(row.resultsCount) || row.leads || row.purchases || 0;
+    map.set(brand, item);
+  }
+  return [...map.values()].sort((a, b) => b.spend - a.spend);
+};
+
+const aggregateAdsByPlatform = (rows: AdsRow[]) => {
+  const map = new Map<string, { platform: string; spend: number; messages: number; comments: number; results: number }>();
+  for (const row of rows) {
+    const platform = row.adAccountName || row.adsPlatform;
+    const item = map.get(platform) ?? { platform, spend: 0, messages: 0, comments: 0, results: 0 };
+    item.spend += row.spend;
+    item.messages += Number(row.messagesCount) || 0;
+    item.comments += Number(row.commentsCount) || 0;
+    item.results += Number(row.resultsCount) || row.leads || row.purchases || 0;
+    map.set(platform, item);
+  }
+  return [...map.values()].sort((a, b) => b.spend - a.spend);
+};
+
+const adsPlatformKind = (platformName: string): AdsPlatform => (/tiktok/i.test(platformName) || /تيك/.test(platformName) ? "TikTok" : "Meta");
+
+const monthDays = (dateText: string) => {
+  const date = new Date(`${dateText}T00:00:00`);
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const count = new Date(year, month + 1, 0).getDate();
+  return Array.from({ length: count }, (_, index) => toDateInput(new Date(year, month, index + 1)));
+};
 
 const makePeriodRange = (dateText: string, mode: "day" | "week" | "month"): DateRange => {
   const date = new Date(`${dateText}T00:00:00`);

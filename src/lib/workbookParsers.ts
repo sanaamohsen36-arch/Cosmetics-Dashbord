@@ -1,5 +1,5 @@
 import * as XLSX from "xlsx";
-import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson } from "../types";
+import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
 import { createId } from "./storage";
 
 type ParsedSalesWorkbook = {
@@ -148,6 +148,7 @@ export const parseAdsWorkbook = async (
 
         const resultType = readText(row, map, adAliases.resultType).toLowerCase();
         const resultCount = readOptionalNumber(row, map, adAliases.results);
+        const costPerResult = readOptionalNumber(row, map, adAliases.costPerConversion);
         output.push({
           id: createId(),
           reportDate: normalizeExcelDate(readText(row, map, adAliases.reportDate)) || fallbackDate,
@@ -165,6 +166,8 @@ export const parseAdsWorkbook = async (
           cpc: readOptionalNumber(row, map, adAliases.cpc),
           cpm: readOptionalNumber(row, map, adAliases.cpm),
           leads: readOptionalNumber(row, map, adAliases.leads),
+          resultsCount: resultCount,
+          costPerResult,
           messagesCount: readOptionalNumber(row, map, adAliases.messagesCount) || (isMessageResult(resultType) ? resultCount : 0),
           commentsCount: readOptionalNumber(row, map, adAliases.commentsCount) || (isCommentResult(resultType) ? resultCount : 0),
           purchases: readOptionalNumber(row, map, adAliases.purchases),
@@ -267,12 +270,16 @@ const readPlatformRow = (
   if (!name) throw new Error(`صف ${excelRow}: اسم الصفحة فارغ.`);
 
   const key = normalizeText(name);
+  const rowType = classifySalesRowType(name);
+  const groupType = classifySalesGroup(name, category);
   const existing =
     map.get(key) ??
     {
       id: createId(),
       reportDate: normalizeExcelDate(row[columns.date]) || fallbackDate,
       platformCategory: category,
+      groupType,
+      rowType,
       platformName: name,
       morningOrders: 0,
       morningRevenue: 0,
@@ -286,7 +293,10 @@ const readPlatformRow = (
   const orders = readRequiredNumber(row[columns.orders], `صف ${excelRow}: عدد أوردرات الصفحة`);
   const value = readRequiredNumber(row[columns.value], `صف ${excelRow}: قيمة الصفحة`);
   const shift = columns.shift >= 0 ? String(row[columns.shift] ?? "") : "";
-  if (isEveningShift(shift)) {
+  if (rowType !== "normal" || !shift) {
+    existing.morningOrders += orders;
+    existing.morningRevenue += value;
+  } else if (isEveningShift(shift)) {
     existing.eveningOrders += orders;
     existing.eveningRevenue += value;
   } else {
@@ -303,6 +313,20 @@ const detectSheetType = (sheetName: string, headers: string[]) => {
   if (/pages_sales|page_platform|platform_name|الصفحة|البلاتفورم/.test(text) && !/السيلز|salesperson/.test(text)) return "pages";
   if (/salespeople_sales|salesperson|السيلز/.test(text) && !/الصفحة|platform/.test(text)) return "people";
   return "mixed";
+};
+
+const classifySalesRowType = (name: string): SalesRowType => {
+  const normalized = normalizeText(name);
+  if (/اجمالي اليوم|إجمالي اليوم|grand/.test(normalized)) return "grand_total";
+  if (/اجمالي|إجمالي|total/.test(normalized)) return "subtotal";
+  return "normal";
+};
+
+const classifySalesGroup = (name: string, category: string): SalesGroupType => {
+  const text = normalizeText(`${category} ${name}`);
+  if (/متابع|follow/.test(text)) return "follow_up";
+  if (/سوشيال|social|ريجينكس|واتس|انست|facebook|instagram|tiktok/.test(text)) return "social";
+  return "other";
 };
 
 const buildHeaderMap = (headers: string[]): HeaderMap => {
