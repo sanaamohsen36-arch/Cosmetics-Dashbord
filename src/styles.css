@@ -138,6 +138,23 @@ input[type="file"] {
   border-color: #1c88ba;
 }
 
+.admin-box {
+  position: absolute;
+  inset-inline: 18px;
+  bottom: 18px;
+  border: 1px solid #1f2a3b;
+  border-radius: 8px;
+  background: #0b1422;
+  padding: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.admin-box span {
+  color: #cbd5e1;
+  font-weight: 800;
+}
+
 .main {
   padding: 26px;
   min-width: 0;
@@ -325,6 +342,47 @@ input[type="file"] {
   display: grid;
   gap: 10px;
   margin-bottom: 14px;
+}
+
+.upload-card {
+  align-content: start;
+}
+
+.preview-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.notice {
+  border: 1px solid #253246;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.notice strong,
+.notice span {
+  display: block;
+}
+
+.success-note {
+  border-color: rgba(34, 197, 94, 0.5);
+  background: rgba(34, 197, 94, 0.08);
+  color: #bbf7d0;
+}
+
+.warning-note {
+  border-color: rgba(245, 158, 11, 0.5);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fde68a;
+}
+
+.error-note {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fecaca;
 }
 
 .upload-box input,
@@ -660,6 +718,10 @@ input[type="file"] {
   gap: 12px;
 }
 
+.kpi-grid.small {
+  grid-template-columns: repeat(4, minmax(160px, 1fr));
+}
+
 .kpi-card {
   border: 1px solid #1f2a3b;
   border-radius: 8px;
@@ -887,6 +949,8 @@ tr.suspicious td {
 
 .app-shell.light .sidebar,
 .app-shell.light .panel,
+.app-shell.light .admin-box,
+.app-shell.light .notice,
 .app-shell.light .ads-platform-group,
 .app-shell.light .ads-status-card,
 .app-shell.light .ads-platform-line,

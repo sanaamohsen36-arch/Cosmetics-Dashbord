@@ -1,6 +1,6 @@
 export type AdsPlatform = "Meta" | "TikTok";
 export type UploadMode = "replace" | "merge" | "cancel";
-export type PageKey = "upload" | "dashboard" | "salespeople" | "platforms" | "ads" | "settings";
+export type PageKey = "dashboard" | "upload" | "sales" | "ads" | "settings";
 export type OcrFieldConfidence = Record<string, number>;
 export type OcrFieldWarnings = Record<string, string[]>;
 export type OcrCellImages = Record<string, string>;

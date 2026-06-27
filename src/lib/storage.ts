@@ -341,32 +341,6 @@ const ensureDefaultPlatforms = async () => {
   await insertRows("platform_settings", missing.map(toPlatformSettingRow));
 };
 
-const fillMissingPlatforms = (
-  rows: SalesByPlatform[],
-  reportDate: string,
-  sourceFileId: string,
-  settings: PlatformSetting[]
-) => {
-  const existing = new Set(rows.map((row) => row.platformName.trim().toLowerCase()));
-  const now = new Date().toISOString();
-  const zeroRows = settings
-    .filter((item) => item.isActive && !isSubtotalPlatformName(item.platformName) && !existing.has(item.platformName.trim().toLowerCase()))
-    .map((item) => ({
-      id: createId(),
-      reportDate,
-      platformName: item.platformName,
-      morningOrders: 0,
-      morningRevenue: 0,
-      eveningOrders: 0,
-      eveningRevenue: 0,
-      totalOrders: 0,
-      totalRevenue: 0,
-      sourceFileId,
-      createdAt: now
-    }));
-  return [...rows, ...zeroRows];
-};
-
 export const saveSalesUpload = async (
   current: AppData,
   rawFile: SalesRawFile,
@@ -375,7 +349,6 @@ export const saveSalesUpload = async (
   mode: UploadMode
 ): Promise<AppData> => {
   if (mode === "cancel") return current;
-  const completePlatforms = fillMissingPlatforms(platforms, rawFile.reportDate, rawFile.id, current.platformSettings);
   const withoutDate =
     mode === "replace"
       ? {
@@ -390,7 +363,7 @@ export const saveSalesUpload = async (
     ...withoutDate,
     salesRawFiles: [...withoutDate.salesRawFiles, rawFile],
     salesBySalesperson: [...withoutDate.salesBySalesperson, ...people],
-    salesByPlatform: [...withoutDate.salesByPlatform, ...completePlatforms]
+    salesByPlatform: [...withoutDate.salesByPlatform, ...platforms]
   };
 
   if (!supabase) {
@@ -405,7 +378,7 @@ export const saveSalesUpload = async (
   }
   await insertRows("sales_raw_files", [toSalesRawFileRow(rawFile)]);
   await insertRows("sales_by_salesperson", people.map(toSalespersonRow));
-  await insertRows("sales_by_platform", completePlatforms.map(toPlatformSalesRow));
+  await insertRows("sales_by_platform", platforms.map(toPlatformSalesRow));
   return next;
 };
 
