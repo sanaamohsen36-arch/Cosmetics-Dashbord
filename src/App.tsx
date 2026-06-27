@@ -23,7 +23,6 @@ import {
   Moon,
   Plus,
   Save,
-  Search,
   Settings,
   Sun,
   UploadCloud,
@@ -49,7 +48,6 @@ import {
   createId,
   deleteAdsForDate,
   deleteDataForDate,
-  deleteSalesForDate,
   deleteRawFile,
   emptyData,
   getStorageMode,
@@ -59,17 +57,15 @@ import {
   saveSalesUpload,
   subscribeToDataChanges
 } from "./lib/storage";
-import { createSampleSales, getLatestSalesOcrDebugImages, inferDateFromFileName, parseAdsWorkbook, parseSalesOcrText, parseSalesWorkbook, runArabicOcr } from "./lib/parsing";
+import { parseAdsWorkbook, parseSalesWorkbook } from "./lib/parsing";
 
 const today = new Date().toISOString().slice(0, 10);
 const numberFormat = new Intl.NumberFormat("ar-EG");
-const latinNumberFormat = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 const adUploadPlatforms = ["ريجينكس", "ريجينكس eg", "واتساب ريجينكس"];
 const chartTooltipStyle = { background: "#111827", border: "1px solid #263241", borderRadius: 8, color: "#e5edf5" };
 
 const money = (value: number | null) => (value === null ? "N/A" : `${numberFormat.format(Math.round(value))} ج`);
 const integer = (value: number | null) => (value === null ? "N/A" : numberFormat.format(Math.round(value)));
-const reviewTotal = (revenue: number, orders: number) => `${latinNumberFormat.format(Math.round(revenue))} / ${latinNumberFormat.format(Math.round(orders))} ج`;
 const ratio = (value: number | null) => (value === null ? "N/A" : value.toFixed(2));
 const percent = (value: number | null) => (value === null ? "N/A" : `${value.toFixed(1)}%`);
 const getAdsTotals = (rows: AdsRow[]) => ({
@@ -314,9 +310,7 @@ function UploadPage({
   const [platformPreview, setPlatformPreview] = useState<SalesByPlatform[]>([]);
   const [originalPeoplePreview, setOriginalPeoplePreview] = useState<SalesBySalesperson[]>([]);
   const [originalPlatformPreview, setOriginalPlatformPreview] = useState<SalesByPlatform[]>([]);
-  const [ocrProgress, setOcrProgress] = useState("");
-  const [ocrText, setOcrText] = useState("");
-  const [ocrDebugImages, setOcrDebugImages] = useState<string[]>([]);
+  const [uploadMessage, setUploadMessage] = useState("");
   const salesExcelInputRef = useRef<HTMLInputElement | null>(null);
 
   const resetSalesPreview = () => {
@@ -324,9 +318,7 @@ function UploadPage({
     setPlatformPreview([]);
     setOriginalPeoplePreview([]);
     setOriginalPlatformPreview([]);
-    setOcrText("");
-    setOcrDebugImages([]);
-    setOcrProgress("");
+    setUploadMessage("");
   };
 
   const handleSalesExcelFile = (file: File | null) => {
@@ -336,7 +328,7 @@ function UploadPage({
     setSalesPreviewVisible(false);
     resetSalesPreview();
     if (file) {
-      setOcrProgress("File uploaded successfully. اضغطي Preview لمراجعة البيانات قبل الحفظ.");
+      setUploadMessage("File uploaded successfully. اضغطي Preview لمراجعة البيانات قبل الحفظ.");
     }
   };
 
@@ -366,44 +358,41 @@ function UploadPage({
 
   const previewSalesExcel = async () => {
     if (!salesExcelFile) return;
-    setOcrProgress("جاري قراءة ملف Excel/CSV...");
+    setUploadMessage("جاري قراءة ملف Excel/CSV...");
     try {
       const parsed = await parseSalesWorkbook(salesExcelFile, salesDate, sourceFileId);
       const people = parsed.people;
       const platforms = parsed.platforms;
       setOriginalPeoplePreview(cloneSalesRows(people));
       setOriginalPlatformPreview(cloneSalesRows(platforms));
-      const corrected = applyOcrCorrections(data, people, platforms);
-      setPeoplePreview(corrected.people);
-      setPlatformPreview(corrected.platforms);
-      setOcrDebugImages([]);
-      setOcrText("");
-      setOcrProgress(
+      setPeoplePreview(people);
+      setPlatformPreview(platforms);
+      setUploadMessage(
         parsed.people.length || parsed.platforms.length
-          ? "Preview ready. تمت قراءة ملف المبيعات. راجعي الجدول وعدلي أي خلية قبل Save Final Data."
+          ? "Preview ready. تمت قراءة ملف المبيعات. راجعي الجدول وعدلي أي خلية قبل الحفظ."
           : "لم يتم العثور على جدول السيلز أو جدول الصفحات داخل الملف. تأكدي من الأعمدة العربية المطلوبة."
       );
       setSalesExcelStatus("previewed");
       setSalesPreviewVisible(true);
     } catch (error) {
-      setOcrProgress(error instanceof Error ? error.message : "تعذر قراءة ملف المبيعات");
+      setUploadMessage(error instanceof Error ? error.message : "تعذر قراءة ملف المبيعات");
     }
   };
 
   const saveSales = async (forceReplace = false) => {
     if (existingSalesDate && !forceReplace && !window.confirm("Data already exists for this date. Replace old sales data?")) {
-      setOcrProgress("تم إلغاء الحفظ، لم يتم استبدال بيانات اليوم.");
+      setUploadMessage("تم إلغاء الحفظ، لم يتم استبدال بيانات اليوم.");
       return;
     }
     const totalMismatches = [...peoplePreview, ...platformPreview].filter(hasSalesTotalMismatch);
     if (totalMismatches.length) {
-      setOcrProgress("لا يمكن الحفظ: فيه صفوف إجماليها لا يساوي صباحي + مسائي. صححي الصفوف المظللة بالأحمر الأول.");
+      setUploadMessage("لا يمكن الحفظ: فيه صفوف إجماليها لا يساوي صباحي + مسائي. صححي الصفوف المظللة بالأحمر الأول.");
       setSalesPreviewVisible(true);
       return;
     }
     const reconciliation = getSalesPreviewReconciliation(peoplePreview, platformPreview);
     if (!reconciliation.canSave) {
-      setOcrProgress("Parsed totals do not match report totals. راجعي Debug Totals وصححي الصفوف قبل الحفظ.");
+      setUploadMessage("Parsed totals do not match report totals. راجعي الإجماليات وصححي الصفوف قبل الحفظ.");
       setSalesPreviewVisible(true);
       return;
     }
@@ -413,7 +402,7 @@ function UploadPage({
     const normalizedPlatforms = detailPlatformPreview.map((row) => normalizePlatform({ ...row, reportDate: salesDate, sourceFileId }));
     const hasSalesValues = [...normalizedPeople, ...normalizedPlatforms].some((row) => row.totalOrders > 0 || row.totalRevenue > 0);
     if (!hasSalesValues) {
-      setOcrProgress("لا يمكن حفظ تقرير فاضي. راجعي المعاينة أو اكتبي أرقام اليوم أولًا.");
+      setUploadMessage("لا يمكن حفظ تقرير فاضي. راجعي المعاينة أو اكتبي أرقام اليوم أولًا.");
       return;
     }
     const now = new Date().toISOString();
@@ -434,10 +423,10 @@ function UploadPage({
       normalizedPlatforms,
       "replace"
     );
-    setOcrProgress("جاري حفظ تقرير المبيعات على Supabase...");
+    setUploadMessage("جاري حفظ تقرير المبيعات على Supabase...");
     await commitData(next);
     setRange({ from: salesDate, to: salesDate });
-    setOcrProgress("Final data saved. تم حفظ تقرير المبيعات وتحديث اللوحة.");
+    setUploadMessage("Final data saved. تم حفظ تقرير المبيعات وتحديث اللوحة.");
     setSalesExcelStatus("saved");
     setSalesPreviewVisible(true);
   };
@@ -511,7 +500,7 @@ function UploadPage({
             </button>
           )}
         </div>
-        {ocrProgress && <p className="status-line">{ocrProgress}</p>}
+        {uploadMessage && <p className="status-line">{uploadMessage}</p>}
       </div>
 
       {salesPreviewVisible && (peoplePreview.length > 0 || platformPreview.length > 0) && (
@@ -1565,299 +1554,6 @@ function SalesTotalsSummary({ reconciliation }: { reconciliation: SalesPreviewRe
         <p>تحذير واضح: إجمالي السيلز لا يساوي إجمالي الصفحات. راجعي الصفوف قبل الحفظ.</p>
       )}
     </div>
-  );
-}
-
-function ManualSalesReviewTable({
-  data,
-  reportDate,
-  sourceFileId,
-  peopleRows,
-  platformRows,
-  originalPeopleRows,
-  originalPlatformRows,
-  setPeopleRows,
-  setPlatformRows
-}: {
-  data: AppData;
-  reportDate: string;
-  sourceFileId: string;
-  peopleRows: SalesBySalesperson[];
-  platformRows: SalesByPlatform[];
-  originalPeopleRows: SalesBySalesperson[];
-  originalPlatformRows: SalesByPlatform[];
-  setPeopleRows: (rows: SalesBySalesperson[]) => void;
-  setPlatformRows: (rows: SalesByPlatform[]) => void;
-}) {
-  const salespersonSuggestions = getSalespersonSuggestions(data, peopleRows);
-  const platformSuggestions = getPlatformSuggestions(data, platformRows);
-  const reconciliation = getSalesPreviewReconciliation(peopleRows, platformRows);
-
-  const updatePerson = (id: string, field: keyof SalesBySalesperson, value: string) => {
-    setPeopleRows(
-      peopleRows.map((row) =>
-        row.id === id
-          ? applyPreviewValidation({
-              ...row,
-              [field]: numericField(field) ? Number(value) : value,
-              ocrReviewStatus: "ok",
-              ocrReviewNotes: row.ocrReviewStatus === "needs_review" ? "تمت مراجعة الصف يدويًا" : row.ocrReviewNotes
-            })
-          : row
-      )
-    );
-  };
-
-  const updatePlatform = (id: string, field: keyof SalesByPlatform, value: string) => {
-    setPlatformRows(
-      platformRows.map((row) =>
-        row.id === id
-          ? applyPreviewValidation({
-              ...row,
-              [field]: numericField(field) ? Number(value) : value,
-              ocrReviewStatus: "ok",
-              ocrReviewNotes: row.ocrReviewStatus === "needs_review" ? "تمت مراجعة الصف يدويًا" : row.ocrReviewNotes
-            })
-          : row
-      )
-    );
-  };
-
-  const resetPerson = (id: string) => {
-    const original = originalPeopleRows.find((row) => row.id === id);
-    if (original) setPeopleRows(peopleRows.map((row) => (row.id === id ? { ...original } : row)));
-  };
-
-  const resetPlatform = (id: string) => {
-    const original = originalPlatformRows.find((row) => row.id === id);
-    if (original) setPlatformRows(platformRows.map((row) => (row.id === id ? { ...original } : row)));
-  };
-
-  return (
-    <div className="manual-review">
-      <div className="table-header">
-        <div>
-          <h2>Manual OCR Review</h2>
-          <p className="review-subtitle">راجعي أسماء السيلز والصفحات والأرقام قبل الحفظ. أي تصحيح يتم حفظه يتطبق تلقائيًا في الرفعات القادمة.</p>
-        </div>
-        <div className="table-tools">
-          <button onClick={() => setPeopleRows([...peopleRows, blankPerson(reportDate, sourceFileId)])}>Add Missing Salesperson Row</button>
-          <button onClick={() => setPlatformRows([...platformRows, blankPlatform(reportDate, sourceFileId)])}>Add Missing Page Row</button>
-        </div>
-      </div>
-      <SalesReconciliationPanel reconciliation={reconciliation} peopleRows={peopleRows} platformRows={platformRows} />
-      <datalist id="salesperson-suggestions">
-        {salespersonSuggestions.map((name) => <option value={name} key={name} />)}
-      </datalist>
-      <datalist id="platform-suggestions">
-        {platformSuggestions.map((name) => <option value={name} key={name} />)}
-      </datalist>
-      <div className="table-wrap">
-        <table className="review-table">
-          <thead>
-            <tr>
-              <th>Page / Platform Name</th>
-              <th>Salesperson Name</th>
-              <th>Salesperson Code</th>
-              <th>Morning Orders</th>
-              <th>Morning Value</th>
-              <th>Evening Orders</th>
-              <th>Evening Value</th>
-              <th>Total Orders</th>
-              <th>Total Value</th>
-              <th>OCR Confidence</th>
-              <th>Notes</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {peopleRows.map((row) => (
-              <tr key={row.id} className={reviewRowClass(row)}>
-                <td><span className="muted-cell">Sales row</span></td>
-                <td><input list="salesperson-suggestions" value={row.salespersonName} onChange={(event) => updatePerson(row.id, "salespersonName", event.target.value)} /></td>
-                <td><input value={row.salespersonCode} onChange={(event) => updatePerson(row.id, "salespersonCode", event.target.value)} /></td>
-                <td><input type="number" value={row.morningOrders} onChange={(event) => updatePerson(row.id, "morningOrders", event.target.value)} /></td>
-                <td><input type="number" value={row.morningRevenue} onChange={(event) => updatePerson(row.id, "morningRevenue", event.target.value)} /></td>
-                <td><input type="number" value={row.eveningOrders} onChange={(event) => updatePerson(row.id, "eveningOrders", event.target.value)} /></td>
-                <td><input type="number" value={row.eveningRevenue} onChange={(event) => updatePerson(row.id, "eveningRevenue", event.target.value)} /></td>
-                <td><input type="number" value={row.totalOrders} onChange={(event) => updatePerson(row.id, "totalOrders", event.target.value)} /></td>
-                <td><input type="number" value={row.totalRevenue} onChange={(event) => updatePerson(row.id, "totalRevenue", event.target.value)} /></td>
-                <td><Badge text={reviewConfidenceLabel(row)} /></td>
-                <td><input value={row.ocrReviewNotes ?? ocrWarningMessages(row).join("، ")} onChange={(event) => updatePerson(row.id, "ocrReviewNotes", event.target.value)} /></td>
-                <td>
-                  <div className="inline-actions">
-                    <button onClick={() => updatePerson(row.id, "ocrReviewStatus", "ok")}>Confirm</button>
-                    <button onClick={() => resetPerson(row.id)}>Reset Row</button>
-                    <button onClick={() => setPeopleRows(peopleRows.filter((item) => item.id !== row.id))}>Delete Row</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {platformRows.map((row) => (
-              <tr key={row.id} className={reviewRowClass(row)}>
-                <td><input list="platform-suggestions" value={row.platformName} onChange={(event) => updatePlatform(row.id, "platformName", event.target.value)} /></td>
-                <td><span className="muted-cell">Page row</span></td>
-                <td><span className="muted-cell">-</span></td>
-                <td><input type="number" value={row.morningOrders} onChange={(event) => updatePlatform(row.id, "morningOrders", event.target.value)} /></td>
-                <td><input type="number" value={row.morningRevenue} onChange={(event) => updatePlatform(row.id, "morningRevenue", event.target.value)} /></td>
-                <td><input type="number" value={row.eveningOrders} onChange={(event) => updatePlatform(row.id, "eveningOrders", event.target.value)} /></td>
-                <td><input type="number" value={row.eveningRevenue} onChange={(event) => updatePlatform(row.id, "eveningRevenue", event.target.value)} /></td>
-                <td><input type="number" value={row.totalOrders} onChange={(event) => updatePlatform(row.id, "totalOrders", event.target.value)} /></td>
-                <td><input type="number" value={row.totalRevenue} onChange={(event) => updatePlatform(row.id, "totalRevenue", event.target.value)} /></td>
-                <td><Badge text={reviewConfidenceLabel(row)} /></td>
-                <td><input value={row.ocrReviewNotes ?? ocrWarningMessages(row).join("، ")} onChange={(event) => updatePlatform(row.id, "ocrReviewNotes", event.target.value)} /></td>
-                <td>
-                  <div className="inline-actions">
-                    <button onClick={() => updatePlatform(row.id, "ocrReviewStatus", "ok")}>Confirm</button>
-                    <button onClick={() => resetPlatform(row.id)}>Reset Row</button>
-                    <button onClick={() => setPlatformRows(platformRows.filter((item) => item.id !== row.id))}>Delete Row</button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function EditablePeopleTable({ rows, setRows }: { rows: SalesBySalesperson[]; setRows: (rows: SalesBySalesperson[]) => void }) {
-  const update = (id: string, field: keyof SalesBySalesperson, value: string) => {
-    setRows(rows.map((row) => (row.id === id ? normalizePerson({ ...row, [field]: numericField(field) ? Number(value) : value }) : row)));
-  };
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>الخلية</th>
-            <th>الاسم</th>
-            <th>الكود</th>
-            <th>طلبات صباحي</th>
-            <th>قيمة صباحي</th>
-            <th>طلبات مسائي</th>
-            <th>قيمة مسائي</th>
-            <th>الإجمالي</th>
-            <th>OCR</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const warnings = ocrWarningMessages(row);
-            return (
-            <tr key={row.id} className={row.totalOrders <= 0 && row.totalRevenue <= 0 ? "suspicious" : ""}>
-              <td>{row.ocrCellImages?.name ? <img className="ocr-cell-image" src={row.ocrCellImages.name} alt="" /> : "-"}</td>
-              <td><input value={row.salespersonName} onChange={(event) => update(row.id, "salespersonName", event.target.value)} /></td>
-              <td><input value={row.salespersonCode} onChange={(event) => update(row.id, "salespersonCode", event.target.value)} /></td>
-              <td><input type="number" value={row.morningOrders} onChange={(event) => update(row.id, "morningOrders", event.target.value)} /></td>
-              <td><input type="number" value={row.morningRevenue} onChange={(event) => update(row.id, "morningRevenue", event.target.value)} /></td>
-              <td><input type="number" value={row.eveningOrders} onChange={(event) => update(row.id, "eveningOrders", event.target.value)} /></td>
-              <td><input type="number" value={row.eveningRevenue} onChange={(event) => update(row.id, "eveningRevenue", event.target.value)} /></td>
-              <td>{reviewTotal(row.totalRevenue, row.totalOrders)}</td>
-              <td className={warnings.length ? "ocr-warning-cell" : ""}>
-                <OcrDebugDetails
-                  row={row}
-                  fields={[
-                    ["name", "الاسم", row.salespersonName],
-                    ["code", "الكود", row.salespersonCode],
-                    ["morningOrders", "طلبات صباحي", row.morningOrders],
-                    ["morningRevenue", "قيمة صباحي", row.morningRevenue],
-                    ["eveningOrders", "طلبات مسائي", row.eveningOrders],
-                    ["eveningRevenue", "قيمة مسائي", row.eveningRevenue],
-                    ["reportTotalOrders", "إجمالي الطلبات OCR", row.totalOrders],
-                    ["reportTotalRevenue", "إجمالي القيمة OCR", row.totalRevenue]
-                  ]}
-                />
-                {warnings.length ? <small>{warnings.join("، ")}</small> : null}
-              </td>
-            </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function EditablePlatformTable({ rows, setRows }: { rows: SalesByPlatform[]; setRows: (rows: SalesByPlatform[]) => void }) {
-  const update = (id: string, field: keyof SalesByPlatform, value: string) => {
-    setRows(rows.map((row) => (row.id === id ? normalizePlatform({ ...row, [field]: numericField(field) ? Number(value) : value }) : row)));
-  };
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>الخلية</th>
-            <th>الصفحة</th>
-            <th>طلبات صباحي</th>
-            <th>قيمة صباحي</th>
-            <th>طلبات مسائي</th>
-            <th>قيمة مسائي</th>
-            <th>الإجمالي</th>
-            <th>OCR</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const warnings = ocrWarningMessages(row);
-            return (
-            <tr key={row.id} className={row.totalOrders <= 0 && row.totalRevenue <= 0 ? "suspicious" : ""}>
-              <td>{row.ocrCellImages?.name ? <img className="ocr-cell-image" src={row.ocrCellImages.name} alt="" /> : "-"}</td>
-              <td><input value={row.platformName} onChange={(event) => update(row.id, "platformName", event.target.value)} /></td>
-              <td><input type="number" value={row.morningOrders} onChange={(event) => update(row.id, "morningOrders", event.target.value)} /></td>
-              <td><input type="number" value={row.morningRevenue} onChange={(event) => update(row.id, "morningRevenue", event.target.value)} /></td>
-              <td><input type="number" value={row.eveningOrders} onChange={(event) => update(row.id, "eveningOrders", event.target.value)} /></td>
-              <td><input type="number" value={row.eveningRevenue} onChange={(event) => update(row.id, "eveningRevenue", event.target.value)} /></td>
-              <td>{reviewTotal(row.totalRevenue, row.totalOrders)}</td>
-              <td className={warnings.length ? "ocr-warning-cell" : ""}>
-                <OcrDebugDetails
-                  row={row}
-                  fields={[
-                    ["name", "الصفحة", row.platformName],
-                    ["morningOrders", "طلبات صباحي", row.morningOrders],
-                    ["morningRevenue", "قيمة صباحي", row.morningRevenue],
-                    ["eveningOrders", "طلبات مسائي", row.eveningOrders],
-                    ["eveningRevenue", "قيمة مسائي", row.eveningRevenue],
-                    ["reportTotalOrders", "إجمالي الطلبات OCR", row.totalOrders],
-                    ["reportTotalRevenue", "إجمالي القيمة OCR", row.totalRevenue]
-                  ]}
-                />
-                {warnings.length ? <small>{warnings.join("، ")}</small> : null}
-              </td>
-            </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function OcrDebugDetails({
-  row,
-  fields
-}: {
-  row: SalesBySalesperson | SalesByPlatform;
-  fields: Array<[string, string, string | number]>;
-}) {
-  const hasImages = fields.some(([key]) => row.ocrCellImages?.[key]);
-  if (!row.ocrConfidence && !hasImages) return <>-</>;
-  return (
-    <details className="ocr-debug-details">
-      <summary>{row.ocrConfidence ? `${row.ocrConfidence}%` : "OCR"}</summary>
-      <div className="ocr-cell-grid">
-        {fields.map(([key, label, value]) => (
-          <div className="ocr-cell-card" key={key}>
-            {row.ocrCellImages?.[key] ? <img src={row.ocrCellImages[key]} alt="" /> : <span className="ocr-empty-image">لا توجد صورة</span>}
-            <strong>{label}</strong>
-            <span>{String(value)}</span>
-            <small>{row.ocrFieldConfidence?.[key] ? `${row.ocrFieldConfidence[key]}%` : "بدون ثقة"}</small>
-          </div>
-        ))}
-      </div>
-    </details>
   );
 }
 

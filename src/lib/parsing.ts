@@ -780,7 +780,7 @@ export const parseSalesWorkbook = async (
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: "", raw: false });
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
     const currentTemplate = parseShiftSalesTemplate(rows, fallbackDate, sourceFileId, now);
     if (currentTemplate.people.length || currentTemplate.platforms.length) {
       people.push(...currentTemplate.people);
@@ -813,33 +813,34 @@ const parseShiftSalesTemplate = (
   for (let index = 0; index < rows.length; index += 1) {
     const header = rows[index].map((cell) => String(cell ?? ""));
     const normalized = header.map(normalizeHeader);
-    const salespersonIndex = findHeaderIndex(normalized, salesAliases.salespersonName);
-    const shiftIndex = findHeaderIndex(normalized, salesAliases.shift);
-    const categoryIndex = findHeaderIndex(normalized, salesAliases.platformCategory);
-    const pageIndex = findHeaderIndex(normalized, salesAliases.pageName);
-    if (salespersonIndex < 0 || shiftIndex < 0 || categoryIndex < 0 || pageIndex < 0) continue;
+    const columnIndexes = getCurrentSalesTemplateIndexes(normalized);
+    if (!columnIndexes) continue;
 
-    const salesOrdersIndex = findHeaderAfter(normalized, salesAliases.orders, shiftIndex, categoryIndex);
-    const salesValueIndex = findHeaderAfter(normalized, salesAliases.value, shiftIndex, categoryIndex);
-    const pageOrdersIndex = findHeaderAfter(normalized, salesAliases.orders, pageIndex, header.length);
-    const pageValueIndex = findHeaderAfter(normalized, salesAliases.value, pageIndex, header.length);
-    if (salesOrdersIndex < 0 || salesValueIndex < 0 || pageOrdersIndex < 0 || pageValueIndex < 0) continue;
+    console.info("Sales workbook structure", {
+      worksheetHeaders: header.map((value, columnIndex) => ({ columnIndex, value })),
+      columnIndexes,
+      sampleRows: rows.slice(index + 1, index + 8)
+    });
 
     const peopleMap = new Map<string, SalesBySalesperson>();
     const platforms: SalesByPlatform[] = [];
 
-    for (const rowCells of rows.slice(index + 1)) {
-      const salespersonName = String(rowCells[salespersonIndex] ?? "").trim();
-      const shift = String(rowCells[shiftIndex] ?? "").trim();
-      const salesOrders = toNumber(rowCells[salesOrdersIndex]);
-      const salesValue = toNumber(rowCells[salesValueIndex]);
-      if (salespersonName && (shift || salesOrders || salesValue)) {
+    for (let rowOffset = index + 1; rowOffset < rows.length; rowOffset += 1) {
+      const rowCells = rows[rowOffset];
+      const rowNumber = rowOffset + 1;
+      const salespersonName = readTextCell(rowCells, columnIndexes.salesperson, rowNumber, "السيلز", false);
+      const shift = readTextCell(rowCells, columnIndexes.shift, rowNumber, "الشيفت", false);
+      if (salespersonName || shift || hasCellValue(rowCells[columnIndexes.salesOrders]) || hasCellValue(rowCells[columnIndexes.salesValue])) {
+        if (!salespersonName) throw new Error(`خطأ في قراءة الصف ${rowNumber}: اسم السيلز فارغ.`);
+        if (!shift) throw new Error(`خطأ في قراءة الصف ${rowNumber}: الشيفت فارغ.`);
+        const salesOrders = readRequiredNumberCell(rowCells, columnIndexes.salesOrders, rowNumber, "عدد أوردرات السيلز");
+        const salesValue = readRequiredNumberCell(rowCells, columnIndexes.salesValue, rowNumber, "قيمة أوردرات السيلز");
         const key = normalizeLookupText(salespersonName);
         const existing =
           peopleMap.get(key) ??
           {
             id: createId(),
-            reportDate: fallbackDate,
+            reportDate: normalizeExcelDate(rowCells[columnIndexes.date]) || fallbackDate,
             salespersonName,
             salespersonCode: "",
             morningOrders: 0,
@@ -866,14 +867,15 @@ const parseShiftSalesTemplate = (
         peopleMap.set(key, existing);
       }
 
-      const platformName = String(rowCells[pageIndex] ?? "").trim();
-      const platformCategory = String(rowCells[categoryIndex] ?? "").trim();
-      const pageOrders = toNumber(rowCells[pageOrdersIndex]);
-      const pageValue = toNumber(rowCells[pageValueIndex]);
-      if (platformName || pageOrders || pageValue) {
+      const platformName = readTextCell(rowCells, columnIndexes.page, rowNumber, "الصفحة", false);
+      const platformCategory = readTextCell(rowCells, columnIndexes.category, rowNumber, "القسم", false);
+      if (platformName || platformCategory || hasCellValue(rowCells[columnIndexes.pageOrders]) || hasCellValue(rowCells[columnIndexes.pageValue])) {
+        if (!platformName) throw new Error(`خطأ في قراءة الصف ${rowNumber}: اسم الصفحة فارغ.`);
+        const pageOrders = readRequiredNumberCell(rowCells, columnIndexes.pageOrders, rowNumber, "عدد أوردرات الصفحة");
+        const pageValue = readRequiredNumberCell(rowCells, columnIndexes.pageValue, rowNumber, "قيمة الصفحة");
         platforms.push({
           id: createId(),
-          reportDate: fallbackDate,
+          reportDate: normalizeExcelDate(rowCells[columnIndexes.date]) || fallbackDate,
           platformCategory,
           platformName,
           morningOrders: pageOrders,
@@ -897,6 +899,39 @@ const parseShiftSalesTemplate = (
     };
   }
   return { people: [], platforms: [] };
+};
+
+const getCurrentSalesTemplateIndexes = (headers: string[]) => {
+  const date = findHeaderIndex(headers, salesAliases.reportDate);
+  const salesperson = findHeaderIndex(headers, salesAliases.salespersonName);
+  const shift = findHeaderIndex(headers, salesAliases.shift);
+  const category = findHeaderIndex(headers, salesAliases.platformCategory);
+  const page = findHeaderIndex(headers, salesAliases.pageName);
+  if ([date, salesperson, shift, category, page].some((index) => index < 0)) return null;
+  const salesOrders = findHeaderAfter(headers, salesAliases.orders, shift, category);
+  const salesValue = findHeaderAfter(headers, salesAliases.value, shift, category);
+  const pageOrders = findHeaderAfter(headers, salesAliases.orders, page, headers.length);
+  const pageValue = findHeaderAfter(headers, salesAliases.value, page, headers.length);
+  if ([salesOrders, salesValue, pageOrders, pageValue].some((index) => index < 0)) return null;
+  return { date, salesperson, shift, salesOrders, salesValue, category, page, pageOrders, pageValue };
+};
+
+const hasCellValue = (value: unknown) => String(value ?? "").trim() !== "";
+
+const readTextCell = (row: unknown[], columnIndex: number, rowNumber: number, label: string, required: boolean) => {
+  const value = String(row[columnIndex] ?? "").trim();
+  if (required && !value) throw new Error(`خطأ في قراءة الصف ${rowNumber}: عمود ${label} فارغ.`);
+  return value;
+};
+
+const readRequiredNumberCell = (row: unknown[], columnIndex: number, rowNumber: number, label: string) => {
+  const raw = row[columnIndex];
+  if (!hasCellValue(raw)) throw new Error(`خطأ في قراءة الصف ${rowNumber}: عمود ${label} فارغ.`);
+  const normalized = normalizeNumericText(String(raw)).replace(/[^\d.-]/g, "");
+  if (!normalized || Number.isNaN(Number(normalized))) {
+    throw new Error(`خطأ في قراءة الصف ${rowNumber}: عمود ${label} يحتوي قيمة غير رقمية (${String(raw)}).`);
+  }
+  return Number(normalized);
 };
 
 const findHeaderAfter = (headers: string[], names: string[], startIndex: number, endIndex: number) => {
