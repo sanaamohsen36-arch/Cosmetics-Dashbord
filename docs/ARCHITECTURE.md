@@ -10,7 +10,9 @@ Dashboard is structured as it grows into the company's internal BI operating
 system. It reflects decisions already confirmed with the product owner:
 migrate to a normalized, brand-aware database schema; use Gemini Vision as
 the primary OCR engine behind a swappable interface; keep the codebase
-modular so future modules can be added without touching unrelated code.
+modular so future modules can be added without touching unrelated code;
+and — as of this revision — support role-based permissions, a full audit
+log, and file versioning as first-class architecture, not bolt-ons.
 
 ---
 
@@ -43,6 +45,11 @@ this can proceed without re-litigating structure):
 - Mapping-memory wiring (corrections tables exist in the DB today but are
   not yet read or written by any code path).
 - Multi-brand support beyond Ads (Sales currently has no brand dimension).
+- **User roles & permissions** (section 13), **audit log** (section 14), and
+  **file versioning** (section 15) — approved direction as of this revision,
+  no code written yet. These three are interdependent: audit log entries
+  need a real "user," which needs auth/roles to exist first; file-version
+  restore/purge actions need a capability to gate them.
 
 ---
 
@@ -55,9 +62,12 @@ this can proceed without re-litigating structure):
 - **Database**: Supabase Postgres, `@supabase/supabase-js` client using only
   the public anon key (no service-role key in client code — correct). RLS is
   enabled on every table but every policy is `using (true) with check
-  (true)`: fully public read/write to anyone holding the anon key. Acceptable
-  for the current MVP stage, flagged in section 12 as something that needs a
-  deliberate decision once this becomes a real internal system.
+  (true)`: fully public read/write to anyone holding the anon key. This was
+  an acknowledged MVP tradeoff; section 13 is the concrete plan that
+  replaces it with role-based policies, so it is no longer an open-ended
+  "revisit someday" item.
+- **Identity**: none today. There is no login, no concept of "who did this."
+  Section 13 introduces Supabase Auth to fix that.
 - **Realtime**: Supabase Realtime subscription on all core tables triggers a
   full reload of the entire dataset into browser memory on any change.
 - **Data model today**: the whole app state (`AppData`) is loaded via
@@ -91,12 +101,14 @@ src/
     dashboard/                  # KPIs, charts, filters
     sales-report/
     page-report/
-    settings/
+    settings/                   # incl. user/role management UI (section 13)
   lib/
     supabase/                  # one place that talks to Supabase; typed table helpers
     mapping-memory/             # normalization + correction store (planned, section 5)
     ocr/                        # done — provider-agnostic interface + adapters
     brands/                     # brand master data (planned, multi-brand)
+    permissions/                 # role -> capability map (section 13)
+    audit/                       # centralized logAction() helper (section 14)
   types/                       # domain types, split per feature where useful
 ```
 
@@ -139,18 +151,25 @@ Planned migration path:
    needs a product decision on whether one company's daily sales report can
    ever span multiple brands in one file, or whether brand is always
    Sales-Upload's first selector too, mirroring Ads Upload. **Open question,
-   to confirm before multi-brand work starts** (section 13).
-3. Update `src/lib/supabase/` (new home for storage functions) to read/write
+   to confirm before multi-brand work starts** (section 16).
+3. Add the tables and columns introduced by this revision:
+   - `profiles` (section 13) — one row per authenticated user, holding role.
+   - `audit_log` (section 14) — append-only action log.
+   - Versioning columns on `sales_files` and `ads_files` (section 15) —
+     `version`, `is_current`, `superseded_at`, `superseded_by`, plus
+     replacing their plain unique constraints with partial unique indexes
+     scoped to `is_current`.
+4. Update `src/lib/supabase/` (new home for storage functions) to read/write
    the normalized tables; keep the flat tables in place but unused during a
    transition window.
-4. Verify against a staging Supabase project, then drop the flat tables in a
+5. Verify against a staging Supabase project, then drop the flat tables in a
    dedicated migration once confirmed safe.
-5. Retire `daily_summary` (dead, write-only today) in favor of
+6. Retire `daily_summary` (dead, write-only today) in favor of
    `daily_combined_summary`, which already supports per-brand rows.
 
-RLS: keep the existing pattern (`using (true) with check (true)`) during
-migration so behavior doesn't change; revisit access control separately
-(section 12).
+RLS: today's `using (true) with check (true)` policies are superseded by the
+role-based policies in section 13 once that work lands — not an indefinite
+MVP tradeoff anymore, but the migration hasn't been executed yet.
 
 ---
 
@@ -165,22 +184,31 @@ Select day (Sales) / Select brand → day → platform (Ads)
   → Validate (column detection, required-field checks, numeric parsing)
   → Editable Preview (user can correct any cell before saving)
   → Confirm Save
-  → Targeted Supabase write (insert only; replace only deletes rows for
-    the same key being replaced — never a full-table wipe, per the P0 fix)
+  → Targeted Supabase write (insert only; "replace" creates a new file
+    version rather than deleting — see section 15 — never a full-table wipe,
+    per the P0 fix)
+  → Audit log entry written (section 14)
   → Realtime notifies other open tabs → dashboard/report aggregation re-reads
+    (current-version rows only, per section 15)
 ```
 
 Rules enforced by the module:
 
-- **Sales**: one saved upload per calendar day. A second upload on the same
-  day is a **replace** (deletes that day's existing rows, then inserts the
-  new ones) — never a merge. Deleting resets the day to "Empty" and removes
-  all rows tied to that file's `source_file_id`.
+- **Sales**: one *current* saved upload per calendar day. A second upload on
+  the same day creates a **new version** (section 15) — the previous
+  version is marked superseded, not deleted. Deleting the current version
+  resets the day's visible state; permanently purging historical data is a
+  separate, gated action (section 15).
 - **Ads**: multiple files per day are allowed, scoped by
   brand + day + platform. Uploading again for the same brand/day/platform is
   a **merge** (adds rows, does not replace) — multiple ad accounts/exports
   for one platform in one day are expected. Deleting a file removes only
-  that file's own rows (`source_file_id` scoped), never siblings.
+  that file's own rows (`source_file_id` scoped), never siblings. If a
+  single already-saved ads file itself needs correcting, that follows the
+  same versioning path as Sales (section 15) rather than a hard delete.
+- Every upload, replace, delete, and preview edit is subject to the
+  capability checks in section 13 and produces an audit log entry
+  (section 14).
 
 ---
 
@@ -222,16 +250,17 @@ look up any known wrong→correct substitutions for salesperson names and page
 names and apply them; when a user manually edits a preview cell whose
 original OCR/parsed value differs, save that correction back to the
 appropriate table (with a `usage_count` increment on repeat, per existing
-schema). This is intentionally provider-agnostic — it lives in
-`lib/mapping-memory/`, not inside any OCR provider.
+schema), and log it via `lib/audit/logAction()` (section 14). This is
+intentionally provider-agnostic — it lives in `lib/mapping-memory/`, not
+inside any OCR provider.
 
 ---
 
 ## 6. Sales module architecture
 
 - **UI**: calendar grid of the selected month, each day marked
-  Uploaded/Empty. Selecting a day shows its existing file (if any) or the
-  upload control.
+  Uploaded/Empty. Selecting a day shows its current file version (if any),
+  a link to that day's version history, or the upload control.
 - **Parsing**: `parseSalesWorkbook` (Excel/CSV) or `parseSalesImage` (OCR) →
   both return `{ people: SalesBySalesperson[], platforms: SalesByPlatform[], errors: string[] }`.
   Detects two possible tables per file: salespeople (name, code, shift,
@@ -241,12 +270,15 @@ schema). This is intentionally provider-agnostic — it lives in
 - **Editable preview**: `EditablePeopleTable` / `EditablePlatformTable`, plus
   a totals-reconciliation banner comparing salespeople-sum vs. platform-sum
   vs. the file's own printed grand total, warning on mismatch.
-- **Save**: `saveSalesUpload()` — replace mode if the day already has data,
-  merge mode otherwise. New salesperson/platform names encountered are
-  registered via the additive `saveMasterDataAdditions()` (not a full
-  rewrite).
-- **Delete**: `deleteRawFile()` cascades by `source_file_id` to
-  `sales_by_salesperson` and `sales_by_platform`, resets the day to Empty.
+- **Save**: `saveSalesUpload()` — creates a new version (section 15) if the
+  day already has a current file, otherwise a first version. New
+  salesperson/platform names encountered are registered via the additive
+  `saveMasterDataAdditions()` (not a full rewrite).
+- **Delete**: removes the *current* version's visibility per section 15;
+  permanent removal of any version's rows is a separate, gated, audited
+  action — not the default "Delete" button behavior once versioning lands.
+- Gated by `sales_upload.*` capabilities (section 13); every action logged
+  (section 14).
 
 ---
 
@@ -272,7 +304,10 @@ schema). This is intentionally provider-agnostic — it lives in
   overwritten at save.
 - **Save**: always merge (multiple files per day are expected).
 - **Delete**: scoped strictly to the one file's `source_file_id` — never
-  touches sibling files for the same brand/day/platform.
+  touches sibling files for the same brand/day/platform. Permanent purge
+  vs. current-version delete follows the same section 15 model as Sales.
+- Gated by `ads_upload.*` capabilities (section 13); every action logged
+  (section 14).
 
 ---
 
@@ -291,6 +326,10 @@ schema). This is intentionally provider-agnostic — it lives in
   current 6 pages. Decision needed: fold its content into Page Report, or
   keep it as a distinct view. Not resolved in this document; flagged for the
   reports-module work.
+- Both report pages are visible to every role by default (`reports.view`,
+  section 13) — reports are read-only and not currently planned to be
+  directly editable; if that changes, edits must go through the same
+  audit-logged path as everything else.
 
 ---
 
@@ -330,6 +369,11 @@ any timezone ahead of UTC (Cairo is UTC+2), the first ~2 hours after local
 midnight can report yesterday's date. Planned fix: compute local dates
 without the UTC round-trip.
 
+**New requirement from file versioning (section 15)**: once versioning
+lands, every aggregation/report query must filter to `is_current = true`
+(or the equivalent "no superseded rows" join). Superseded versions must
+never be double-counted alongside their replacement.
+
 ---
 
 ## 10. Environment variables
@@ -337,16 +381,17 @@ without the UTC round-trip.
 | Variable | Required | Exposed to browser? | Purpose |
 |---|---|---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Yes | Yes (by design) | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Yes (by design — anon key is meant to be public; access control is RLS's job, see section 12) | Supabase anon client key |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Yes (by design — anon key is meant to be public; access control is RLS's job, see section 13) | Supabase anon client key |
+| `SUPABASE_SERVICE_ROLE_KEY` | Planned, needed once section 13 lands | **No — server-only** | Admin actions that can't run under a normal user's RLS policy (e.g. inviting a user, assigning/changing a role). Read only inside API routes, never sent to the browser. |
 | `OCR_PROVIDER` | No (defaults to `gemini-vision`) | No | Selects the OCR engine |
 | `GEMINI_API_KEY` | Yes, if using Gemini OCR | **No — server-only** | Gemini Vision API key, read only inside `src/app/api/ocr/sales/route.ts` |
 | `GEMINI_OCR_MODEL` | No (defaults to `gemini-2.0-flash`) | No | Overrides the Gemini model name |
-| `UPLOAD_PASSWORD` | No | No | Optional shared password gate, checked by `src/app/api/upload-auth/route.ts` |
+| `UPLOAD_PASSWORD` | No | No | Optional shared password gate, checked by `src/app/api/upload-auth/route.ts`. Superseded in spirit by real per-user auth (section 13), but left as-is until that lands. |
 
 Rule: any future secret (Telegram bot token, n8n webhook secret, Google
 Drive service-account key, Meta/TikTok API tokens) follows the same pattern
-as `GEMINI_API_KEY` — server-side env var, read only inside an API route,
-never a `NEXT_PUBLIC_*` variable.
+as `GEMINI_API_KEY`/`SUPABASE_SERVICE_ROLE_KEY` — server-side env var, read
+only inside an API route, never a `NEXT_PUBLIC_*` variable.
 
 ---
 
@@ -382,7 +427,8 @@ never a `NEXT_PUBLIC_*` variable.
 ```
 
 **Target**, once the module migration (section 2) lands — see section 2 for
-the full tree; only `app/`, `features/*`, `lib/*`, and `types/` change.
+the full tree, now including `lib/permissions/` and `lib/audit/`; only
+`app/`, `features/*`, `lib/*`, and `types/` change.
 
 ---
 
@@ -392,21 +438,30 @@ the full tree; only `app/`, `features/*`, `lib/*`, and `types/` change.
   Adding a new provider is always fine; changing the interface itself affects
   every current and future adapter and should be a deliberate, reviewed
   change.
-- **The one-upload-per-day-per-Sales-file rule** and the
+- **The one-current-upload-per-day-per-Sales-file rule** and the
   merge-per-file-for-Ads rule (section 4). These encode real business rules
   (one closing report per day; multiple ad exports per day are normal), not
   incidental behavior.
-- **Delete scoping**: sales delete always resets the day to Empty and
-  removes only that day's rows; ads delete always removes only the one
-  file's rows. Never widen a delete to affect siblings without an explicit
-  request.
+- **Delete scoping**: sales delete affects only the current version of one
+  day; ads delete always removes only the one file's rows. Never widen a
+  delete to affect siblings without an explicit request.
 - **No full-table wipes as a save mechanism.** The P0 fix in this project's
   history exists because of exactly this pattern; any new save path must use
   targeted insert/update/delete, never delete-all-then-reinsert-all.
-- **Supabase credentials and RLS policy changes.** Current policies are
-  fully open (`using (true) with check (true)`) as an explicit, acknowledged
-  MVP tradeoff — not an oversight. Tightening or loosening this needs a
-  separate, deliberate decision, not a side effect of another change.
+- **No hard-deleting a file version as part of a normal "replace" or
+  "delete" action** (section 15). Only an explicit, separately-confirmed
+  purge action — gated by a dedicated capability — may permanently remove a
+  version's data.
+- **Audit log entries are append-only.** No application code path may
+  update or delete an `audit_log` row, ever (section 14).
+- **Role → capability mappings** (section 13) should change deliberately,
+  with the Owner's sign-off — not as a side effect of an unrelated feature
+  change.
+- **Supabase credentials and RLS policy changes.** The move from today's
+  fully-open policies to the role-based model in section 13 is now the
+  approved direction, but the migration itself — and any further tightening
+  or loosening after that — needs a separate, deliberate decision, not a
+  side effect of another change.
 - **KPI formulas in `lib/metrics.ts`** — changing how ROAS/ROI/CPA/AOV are
   calculated changes historical reporting; needs a documented reason and
   ideally a before/after comparison on real data.
@@ -418,34 +473,221 @@ the full tree; only `app/`, `features/*`, `lib/*`, and `types/` change.
 
 ---
 
-## 13. Future modules (planned hook points, not built yet)
+## 13. User Roles & Permissions
+
+**Roles**: Owner, Marketing Manager, Media Buyer, Sales Manager, Data Entry,
+Viewer.
+
+**Identity**: the app has no authentication today (anon key only). This
+introduces Supabase Auth so every action can be tied to a real user. Each
+authenticated user gets exactly one role, stored separately from
+`auth.users` (which Supabase manages):
+
+```sql
+create table public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  display_name text not null,
+  role text not null check (
+    role in ('owner','marketing_manager','media_buyer','sales_manager','data_entry','viewer')
+  ),
+  active boolean not null default true,
+  created_at timestamptz not null default now()
+);
+```
+
+**Permissions are modular capabilities, not hardcoded per-role checks
+scattered through the code.** A single list of capability strings is defined
+once (`lib/permissions/`) and referenced everywhere a check is needed:
+
+```
+sales_upload.upload
+sales_upload.replace
+sales_upload.delete_current
+sales_upload.purge_version
+ads_upload.upload
+ads_upload.delete
+ads_upload.purge_version
+preview.edit
+mapping_memory.edit
+settings.manage_master_data      (platforms/salespeople lists)
+settings.manage_users            (assign/change roles)
+reports.view
+audit_log.view
+file_versions.view
+file_versions.restore
+```
+
+**Proposed default role → capability matrix.** This is a starting point for
+discussion, not a locked-in decision — confirm/adjust with the Owner before
+implementation:
+
+| Capability | Owner | Marketing Mgr | Media Buyer | Sales Mgr | Data Entry | Viewer |
+|---|---|---|---|---|---|---|
+| reports.view | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| sales_upload.upload / replace | ✅ | | | ✅ | ✅ | |
+| sales_upload.delete_current | ✅ | | | ✅ | | |
+| ads_upload.upload | ✅ | ✅ | ✅ | | | |
+| ads_upload.delete | ✅ | ✅ | | | | |
+| preview.edit | ✅ | ✅ | ✅ | ✅ | ✅ | |
+| mapping_memory.edit | ✅ | ✅ | ✅ | ✅ | ✅ | |
+| settings.manage_master_data | ✅ | ✅ | | ✅ | | |
+| settings.manage_users | ✅ | | | | | |
+| audit_log.view | ✅ | ✅ | | | | |
+| file_versions.view | ✅ | ✅ | ✅ | ✅ | | |
+| `*.purge_version` | ✅ | | | | | |
+
+**Enforcement happens in two layers, and only one of them is real security:**
+
+1. **RLS policies (the actual boundary)** — every table's policy checks the
+   caller's role via a join to `profiles`, replacing today's
+   `using (true) with check (true)`.
+2. **UI-level `can(role, capability)` helper (convenience only)** — hides or
+   disables actions the current user's role doesn't have, so the interface
+   doesn't invite denied actions. Never the thing actually preventing them.
+
+**Sequencing**: this must land before Audit Log (section 14) is meaningful —
+a log entry's "User" field requires a real identity to exist.
+
+---
+
+## 14. Audit Log
+
+Every important action is recorded, append-only, with who/when/what/before/
+after:
+
+```sql
+create table public.audit_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id),
+  user_role text not null,
+  action text not null,          -- e.g. 'sales_upload.replace', 'ocr_correction.save'
+  entity_type text not null,     -- e.g. 'sales_file', 'ads_file', 'mapping_correction'
+  entity_id text,
+  previous_value jsonb,
+  new_value jsonb,
+  metadata jsonb,                -- report_date, brand_id, platform, etc.
+  created_at timestamptz not null default now()
+);
+```
+
+- **Append-only by construction**: RLS grants `insert` to any authenticated
+  role; there is no `update` or `delete` policy at all, so no application
+  code path — not even an Owner's — can alter or erase history.
+- **What gets logged**, matching the request directly: file upload, file
+  replace (i.e. a new version created, section 15), file delete (current-
+  version delete and permanent purge are logged as distinct actions),
+  preview data edits before save, report edits (if reports ever become
+  directly editable), OCR/mapping corrections, and settings/master-data or
+  role changes.
+- **Where it's written from**: centralized in a single `lib/audit/logAction()`
+  helper, called once per action from the same targeted save/delete
+  functions already living in `lib/supabase/` (`saveSalesUpload`,
+  `saveAdsUpload`, `deleteRawFile`/version-purge, `saveMasterDataAdditions`,
+  mapping-memory writes, settings updates). Not duplicated per feature — one
+  extra, scoped insert per action, consistent with the "no full-table
+  wipes" rule (section 12).
+- **Read access**: gated by the `audit_log.view` capability (section 13) —
+  proposed default is Owner and Marketing Manager only.
+
+---
+
+## 15. File Versioning
+
+**Problem today**: Sales "replace" deletes the existing day's rows and
+inserts new ones — no history survives. Ads has no replace concept
+currently (uploads always merge), but a single already-saved ads file may
+need the same treatment if it turns out to be wrong.
+
+**Schema change** (amends section 3): both `sales_files` and `ads_files`
+gain version-tracking columns, and their uniqueness constraints move from
+"one row per day" to "one *current* row per day":
+
+```sql
+alter table public.sales_files
+  add column version integer not null default 1,
+  add column is_current boolean not null default true,
+  add column superseded_at timestamptz,
+  add column superseded_by uuid references public.sales_files(id);
+
+drop index if exists sales_files_report_date_key; -- old flat unique(report_date)
+create unique index sales_files_current_report_date_key
+  on public.sales_files(report_date) where is_current;
+```
+
+The equivalent applies to `ads_files`, scoped to
+`(brand_id, report_date, ads_platform)` instead of just `report_date`,
+matching how ads files are already keyed.
+
+**Behavior change — "replace" stops deleting anything:**
+
+1. The existing current file row is marked `is_current = false`,
+   `superseded_at = now()`, `superseded_by = <new file id>`.
+2. A brand-new file row is inserted with `version = previous version + 1`,
+   `is_current = true`, and its own new child rows
+   (`salespeople_sales`/`pages_sales`/`ads_data`) tied to the new file's id.
+3. Old versions and their rows remain in the database, untouched and
+   inspectable, until an explicit purge.
+
+**"Delete" splits into two distinct, separately-confirmed actions:**
+
+- *Delete current version* — removes the current version from the day's
+  visible state. **Open UX question, not decided here**: should the day
+  then revert to showing the previous version as current, or become Empty
+  even though history exists? Recommendation to confirm with the Owner:
+  revert to the previous version if one exists, otherwise Empty.
+- *Permanently purge a version* — irreversible; gated by the
+  `*.purge_version` capability (section 13, Owner-only by default);
+  requires a separate, explicit confirmation distinct from normal delete;
+  writes an audit log entry (section 14) whose `previous_value` captures a
+  full snapshot of what was removed, since it cannot be recovered from the
+  database after this action.
+
+**Aggregation impact** (amends section 9): every report/KPI query must
+filter to `is_current = true` (or the equivalent "not superseded" join) so a
+superseded version is never double-counted alongside its replacement.
+
+**UI**: a per-day/file "Version history" panel listing Version 1, Version 2,
+Version 3… each showing `uploaded_at` and `uploaded_by` (needs section 13's
+identity), with a read-only preview of that version's data. The purge action
+is visually distinct (destructive styling) from the normal delete action.
+
+---
+
+## 16. Future modules (planned hook points, not built yet)
 
 None of the following are implemented. This section exists so the modular
 structure accommodates them without rework when their time comes.
 
 - **AI Assistant**: would consume the same `lib/` data-access layer through a
   new `app/api/assistant/` route (or a small set of them), not by talking to
-  Supabase directly from a UI component. Likely needs a read-scoped Supabase
-  role (see section 12's RLS note) rather than the current fully-open anon
-  policy, once it's making automated queries.
+  Supabase directly from a UI component. Needs its own role/capability
+  (section 13) — likely a read-scoped one, since an assistant answering
+  questions shouldn't implicitly gain write access — and any action it does
+  take (if it's ever allowed to write) must go through the same
+  `lib/audit/logAction()` path (section 14) as a human user, attributed to
+  a distinct service identity rather than impersonating a person.
 - **Telegram integration**: a notification/bot layer — most likely a
-  scheduled or webhook-triggered API route that reads already-aggregated
-  data (e.g. daily KPIs) and posts to Telegram. Should not require touching
-  upload or report module internals; it's a consumer of existing aggregation.
+  scheduled or webhook-triggered API route that reads already-aggregated,
+  current-version data (section 15) and posts to Telegram. Should not
+  require touching upload or report module internals; it's a consumer of
+  existing aggregation.
 - **n8n workflows**: external automation calling Supabase's REST API or
   dedicated webhook routes in this app. Will need a scoped API key/policy
   rather than the public anon key, since n8n runs server-side and can hold a
-  secret safely.
+  secret safely — likely its own service role under section 13's model,
+  logged like any other actor under section 14.
 - **Google Drive backup**: a scheduled job (Vercel Cron or an n8n workflow)
   exporting raw uploaded files and/or a DB snapshot to Drive via a Google
-  service account. Reads already-saved data; should not sit in the
+  service account. Reads already-saved data (including old versions, per
+  section 15, if a full history backup is wanted); should not sit in the
   upload-save critical path.
 - **Meta/TikTok API integrations**: direct pulls via the Marketing APIs as an
   alternative to manual CSV upload. In the normalized schema, `ads_data` rows
   would need a `source` field (`manual_upload` vs `api_sync`) so both paths
   can coexist and reports don't care which one populated a given row. This
   would live in `features/ads-upload/` as an alternate data-entry path, not
-  a separate module.
+  a separate module. API-synced rows still go through the same versioning
+  (section 15) and audit logging (section 14) as manual uploads.
 - **Multi-brand support**: partially modeled already (`brands` table, Ads
   Upload already brand-scoped). Extending it to Sales Upload requires the
   open schema question in section 3 (does one sales report ever span
