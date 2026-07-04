@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
 import { createId } from "./storage";
+import { normalizeArabicText } from "./normalize";
 import { requestOcrExtraction } from "./ocr/client";
 
 type ParsedSalesWorkbook = {
@@ -364,9 +365,11 @@ const readPlatformRow = (
 };
 
 const detectSheetType = (sheetName: string, headers: string[]) => {
+  // text has already been through normalizeText(), which folds ة -> ه, so the
+  // literals below must match the post-normalization spelling ("الصفحه").
   const text = normalizeText(`${sheetName} ${headers.join(" ")}`);
-  if (/pages_sales|page_platform|platform_name|الصفحة|البلاتفورم/.test(text) && !/السيلز|salesperson/.test(text)) return "pages";
-  if (/salespeople_sales|salesperson|السيلز/.test(text) && !/الصفحة|platform/.test(text)) return "people";
+  if (/pages_sales|page_platform|platform_name|الصفحه|البلاتفورم/.test(text) && !/السيلز|salesperson/.test(text)) return "pages";
+  if (/salespeople_sales|salesperson|السيلز/.test(text) && !/الصفحه|platform/.test(text)) return "people";
   return "mixed";
 };
 
@@ -450,14 +453,9 @@ const normalizeExcelDate = (value: unknown): string => {
   return "";
 };
 
-const normalizeHeader = (value: unknown) =>
-  String(value ?? "")
-    .replace(/[إأآ]/g, "ا")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+const normalizeHeader = (value: unknown) => normalizeArabicText(value);
 
-const normalizeText = (value: string) => normalizeHeader(value);
+const normalizeText = (value: string) => normalizeArabicText(value);
 const hasValue = (value: unknown) => String(value ?? "").trim() !== "";
 const isEmptyRow = (row: unknown[]) => row.every((cell) => !hasValue(cell));
 const isUnnamed = (value: string) => /^unnamed|^__empty|^null$|^undefined$/i.test(value.trim());
