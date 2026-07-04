@@ -3,9 +3,9 @@
 import { useState } from "react";
 import { FileSpreadsheet, FolderOpen, Save, Trash2 } from "lucide-react";
 import type { AppData, SalesByPlatform, SalesBySalesperson, SalesRawFile } from "../../types";
-import { today } from "../../lib/date";
+import { firstDayOfMonth, monthKey, today } from "../../lib/date";
 import { integer, money } from "../../lib/format";
-import { Badge, CalendarMonth, ErrorList, SimpleTable } from "../../lib/ui";
+import { Badge, CalendarMonth, ErrorList, MonthFolderList, SimpleTable } from "../../lib/ui";
 import {
   applyPageCorrections,
   applySalespersonCorrections,
@@ -27,6 +27,8 @@ export function SalesFolderPage({ data, setData }: { data: AppData; setData: (da
   const [statusMessage, setStatusMessage] = useState("");
   const uploadedDates = new Set(data.salesRawFiles.map((file) => file.reportDate));
   const existingFile = data.salesRawFiles.find((file) => file.reportDate === selectedDate);
+  const selectedMonth = monthKey(selectedDate);
+  const monthsWithUploads = new Set(data.salesRawFiles.map((file) => monthKey(file.reportDate)));
   const deleteExistingFile = async () => {
     if (!existingFile) return;
     const confirmed = window.confirm(`Delete saved sales data for ${selectedDate}?`);
@@ -43,9 +45,16 @@ export function SalesFolderPage({ data, setData }: { data: AppData; setData: (da
           <FolderOpen />
           <div>
             <h2>Sales / المبيعات</h2>
-            <p>كل يوم له مساحة رفع مستقلة. المبيعات تسمح بملف نهائي واحد فقط لكل يوم.</p>
+            <p>اختاري الشهر أولاً، ثم اليوم. كل يوم له مساحة رفع مستقلة، وملف نهائي واحد فقط لكل يوم.</p>
           </div>
         </div>
+        <MonthFolderList
+          selectedMonth={selectedMonth}
+          onSelect={(month) => setSelectedDate(firstDayOfMonth(month))}
+          isMonthUploaded={(month) => monthsWithUploads.has(month)}
+        />
+      </section>
+      <section className="panel">
         <CalendarMonth selectedDate={selectedDate} uploadedDates={uploadedDates} onSelect={setSelectedDate} />
       </section>
       <section className="panel">

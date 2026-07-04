@@ -1,6 +1,7 @@
+import { useState } from "react";
 import type { ReactNode } from "react";
 import type { DateRange } from "../../types";
-import { monthDays } from "../date";
+import { formatMonthLabel, monthDays } from "../date";
 
 export function DateFilters({
   range,
@@ -58,6 +59,44 @@ export function CalendarMonth({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// Month-first navigation: folder cards for each month of a browsable year
+// (with prev/next year controls), so a day calendar is always reached by
+// picking its month first instead of only ever showing whatever month
+// `today` happens to fall in with no way to move to another one.
+export function MonthFolderList({
+  selectedMonth,
+  onSelect,
+  isMonthUploaded
+}: {
+  selectedMonth: string;
+  onSelect: (monthKey: string) => void;
+  isMonthUploaded: (monthKey: string) => boolean;
+}) {
+  const [visibleYear, setVisibleYear] = useState(Number(selectedMonth.slice(0, 4)));
+  const months = Array.from({ length: 12 }, (_, index) => `${visibleYear}-${String(index + 1).padStart(2, "0")}`);
+
+  return (
+    <div className="month-folder-list">
+      <div className="month-folder-toolbar">
+        <button className="ghost" onClick={() => setVisibleYear((year) => year - 1)}>‹</button>
+        <strong>{visibleYear}</strong>
+        <button className="ghost" onClick={() => setVisibleYear((year) => year + 1)}>›</button>
+      </div>
+      <div className="month-folder-grid">
+        {months.map((month) => (
+          <button
+            key={month}
+            className={`month-folder ${month === selectedMonth ? "selected" : ""} ${isMonthUploaded(month) ? "has-data" : ""}`}
+            onClick={() => onSelect(month)}
+          >
+            {formatMonthLabel(month)}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
