@@ -3,22 +3,29 @@
 import { useState } from "react";
 import { FileSpreadsheet, FolderOpen, Save, Trash2 } from "lucide-react";
 import type { AdsPlatform, AdsRawFile, AdsRow, AppData } from "../../types";
-import { today } from "../../lib/date";
+import { firstDayOfMonth, monthKey, today } from "../../lib/date";
 import { adsPlatformOptions, brandOptions } from "../../lib/constants";
-import { ErrorList, CalendarMonth, SimpleTable } from "../../lib/ui";
+import { ErrorList, CalendarMonth, MonthFolderList, SimpleTable } from "../../lib/ui";
 import { createId, deleteRawFile, saveAdsUpload } from "../../lib/supabase";
 import { parseAdsWorkbook } from "../../lib/workbookParsers";
 
 export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
+  // Platform is the primary folder structure (Facebook Ads, Instagram Ads,
+  // WhatsApp Ads, TikTok Ads, WhatsApp TikTok Ads, Other); brand is a
+  // secondary selector within a platform, not the top-level nav.
+  const [platformName, setPlatformName] = useState(adsPlatformOptions[0]);
   const knownBrands = [...new Set([...brandOptions, ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)])];
   const [brand, setBrand] = useState(knownBrands[0] || brandOptions[0]);
   const [selectedDate, setSelectedDate] = useState(today);
-  const [platformName, setPlatformName] = useState(adsPlatformOptions[0]);
   const [statusMessage, setStatusMessage] = useState("");
-  const uploadedDates = new Set(data.adsRawFiles.filter((file) => file.salesPlatformName === brand).map((file) => file.reportDate));
-  const filesForSelection = data.adsRawFiles.filter(
-    (file) => file.salesPlatformName === brand && file.reportDate === selectedDate && file.adAccountName === platformName
+
+  const filesForPlatformAndBrand = data.adsRawFiles.filter(
+    (file) => file.adAccountName === platformName && file.salesPlatformName === brand
   );
+  const uploadedDates = new Set(filesForPlatformAndBrand.map((file) => file.reportDate));
+  const monthsWithUploads = new Set(filesForPlatformAndBrand.map((file) => monthKey(file.reportDate)));
+  const selectedMonth = monthKey(selectedDate);
+  const filesForSelection = filesForPlatformAndBrand.filter((file) => file.reportDate === selectedDate);
   const deleteAdsFile = async (fileId: string) => {
     const confirmed = window.confirm("Delete this ads file and only its imported rows?");
     if (!confirmed) return;
@@ -34,28 +41,35 @@ export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data
           <FolderOpen />
           <div>
             <h2>Ads / الإعلانات</h2>
-            <p>اختاري brand، ثم اليوم، ثم منصة الإعلان. الاستبدال يمس المنصة المختارة فقط.</p>
+            <p>اختاري منصة الإعلان أولاً، ثم Brand، ثم الشهر واليوم. يمكن رفع أكثر من ملف CSV لنفس اليوم.</p>
           </div>
         </div>
         <div className="folder-tabs">
-          {knownBrands.map((item) => (
-            <button key={item} className={brand === item ? "primary" : ""} onClick={() => setBrand(item)}>{item}</button>
+          {adsPlatformOptions.map((item) => (
+            <button key={item} className={platformName === item ? "primary" : ""} onClick={() => setPlatformName(item)}>{item}</button>
           ))}
         </div>
       </section>
       <section className="panel">
-        <h2>{brand}</h2>
-        <CalendarMonth selectedDate={selectedDate} uploadedDates={uploadedDates} onSelect={setSelectedDate} />
-      </section>
-      <section className="panel">
         <div className="form-row">
           <label>
-            Ads platform
-            <select value={platformName} onChange={(event) => setPlatformName(event.target.value)}>
-              {adsPlatformOptions.map((item) => <option key={item}>{item}</option>)}
+            Brand
+            <select value={brand} onChange={(event) => setBrand(event.target.value)}>
+              {knownBrands.map((item) => <option key={item}>{item}</option>)}
             </select>
           </label>
         </div>
+        <MonthFolderList
+          selectedMonth={selectedMonth}
+          onSelect={(month) => setSelectedDate(firstDayOfMonth(month))}
+          isMonthUploaded={(month) => monthsWithUploads.has(month)}
+        />
+      </section>
+      <section className="panel">
+        <h2>{platformName} — {brand}</h2>
+        <CalendarMonth selectedDate={selectedDate} uploadedDates={uploadedDates} onSelect={setSelectedDate} />
+      </section>
+      <section className="panel">
         {filesForSelection.length ? (
           <div className="notice success-note">
             <strong>Uploaded for {brand} / {selectedDate} / {platformName}</strong>
