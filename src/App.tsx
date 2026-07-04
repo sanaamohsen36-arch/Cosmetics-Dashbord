@@ -61,7 +61,12 @@ import {
 } from "./lib/storage";
 import { parseAdsWorkbook, parseSalesImage, parseSalesWorkbook } from "./lib/workbookParsers";
 
-const today = new Date().toISOString().slice(0, 10);
+// Local calendar date, not UTC. date.toISOString() always renders in UTC, so
+// for any timezone ahead of UTC (e.g. Cairo, UTC+2) the first couple of hours
+// after local midnight would otherwise report yesterday's date.
+const toDateInput = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+const today = toDateInput(new Date());
 const numberFormat = new Intl.NumberFormat("ar-EG");
 const money = (value: number | null) => (value === null ? "N/A" : `${numberFormat.format(Math.round(value))} ج`);
 const integer = (value: number | null) => (value === null ? "N/A" : numberFormat.format(Math.round(value)));
@@ -1374,5 +1379,3 @@ const makePeriodRange = (dateText: string, mode: "day" | "week" | "month"): Date
   const to = new Date(date.getFullYear(), date.getMonth() + 1, 0);
   return { from: toDateInput(from), to: toDateInput(to) };
 };
-
-const toDateInput = (date: Date) => date.toISOString().slice(0, 10);
