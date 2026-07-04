@@ -1,6 +1,7 @@
 import * as XLSX from "xlsx";
 import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
 import { createId } from "./storage";
+import { requestOcrExtraction } from "./ocr/client";
 
 type ParsedSalesWorkbook = {
   people: SalesBySalesperson[];
@@ -50,6 +51,54 @@ const adAliases = {
   costPerConversion: ["cost per conversion", "cost/conversion"]
 };
 
+// Shared by the Excel/CSV path and the OCR path: both ultimately produce a plain
+// row-major grid of cell text, so column detection, shift/subtotal classification,
+// and numeric validation only need to live once.
+const processGridIntoMaps = (
+  rows: unknown[][],
+  gridLabel: string,
+  fallbackDate: string,
+  sourceFileId: string,
+  now: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  platformMap: Map<string, SalesByPlatform>,
+  errors: string[],
+  debug: WorkbookDebug[]
+) => {
+  const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
+  if (headerRowIndex < 0) return;
+
+  const headers = rows[headerRowIndex].map((cell) => String(cell ?? "").trim());
+  debug.push({
+    sheetName: gridLabel,
+    headers: headers.map((value, columnIndex) => ({ columnIndex, value })).filter((item) => item.value && !isUnnamed(item.value)),
+    sampleRows: rows.slice(headerRowIndex + 1, headerRowIndex + 7)
+  });
+  console.info("Sales grid inspected", debug[debug.length - 1]);
+
+  const normalizedHeaders = headers.map(normalizeHeader);
+  const peopleColumns = detectPeopleColumns(normalizedHeaders);
+  const pageColumns = detectPageColumns(normalizedHeaders, peopleColumns?.endIndex ?? -1);
+  const sheetType = detectSheetType(gridLabel, normalizedHeaders);
+
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const excelRow = rowIndex + 1;
+    if (isEmptyRow(row)) continue;
+
+    try {
+      if (peopleColumns && sheetType !== "pages") {
+        readPeopleRow(row, excelRow, peopleColumns, fallbackDate, sourceFileId, now, peopleMap);
+      }
+      if (pageColumns && sheetType !== "people") {
+        readPlatformRow(row, excelRow, pageColumns, fallbackDate, sourceFileId, now, platformMap);
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+};
+
 export const parseSalesWorkbook = async (
   file: File,
   fallbackDate: string,
@@ -65,38 +114,7 @@ export const parseSalesWorkbook = async (
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
-    const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
-    if (headerRowIndex < 0) continue;
-
-    const headers = rows[headerRowIndex].map((cell) => String(cell ?? "").trim());
-    debug.push({
-      sheetName,
-      headers: headers.map((value, columnIndex) => ({ columnIndex, value })).filter((item) => item.value && !isUnnamed(item.value)),
-      sampleRows: rows.slice(headerRowIndex + 1, headerRowIndex + 7)
-    });
-    console.info("Sales workbook inspected", debug[debug.length - 1]);
-
-    const normalizedHeaders = headers.map(normalizeHeader);
-    const peopleColumns = detectPeopleColumns(normalizedHeaders);
-    const pageColumns = detectPageColumns(normalizedHeaders, peopleColumns?.endIndex ?? -1);
-    const sheetType = detectSheetType(sheetName, normalizedHeaders);
-
-    for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
-      const row = rows[rowIndex];
-      const excelRow = rowIndex + 1;
-      if (isEmptyRow(row)) continue;
-
-      try {
-        if (peopleColumns && sheetType !== "pages") {
-          readPeopleRow(row, excelRow, peopleColumns, fallbackDate, sourceFileId, now, peopleMap);
-        }
-        if (pageColumns && sheetType !== "people") {
-          readPlatformRow(row, excelRow, pageColumns, fallbackDate, sourceFileId, now, platformMap);
-        }
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
-      }
-    }
+    processGridIntoMaps(rows, sheetName, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug);
   }
 
   return {
@@ -105,6 +123,43 @@ export const parseSalesWorkbook = async (
     errors,
     debug
   };
+};
+
+// Entry point for any non-spreadsheet source (OCR, future manual paste, etc.) that
+// has already been reduced to a row-major grid of cell text. Runs the exact same
+// column detection and validation as the Excel/CSV path.
+export const parseSalesGrid = (
+  rows: unknown[][],
+  fallbackDate: string,
+  sourceFileId: string,
+  gridLabel = "ocr"
+): ParsedSalesWorkbook => {
+  const now = new Date().toISOString();
+  const peopleMap = new Map<string, SalesBySalesperson>();
+  const platformMap = new Map<string, SalesByPlatform>();
+  const errors: string[] = [];
+  const debug: WorkbookDebug[] = [];
+
+  processGridIntoMaps(rows, gridLabel, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug);
+
+  return {
+    people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    errors,
+    debug
+  };
+};
+
+export const parseSalesImage = async (
+  file: File,
+  fallbackDate: string,
+  sourceFileId: string
+): Promise<ParsedSalesWorkbook> => {
+  const extraction = await requestOcrExtraction(file, fallbackDate);
+  if (extraction.warnings.length) {
+    console.warn("Sales OCR warnings", extraction.providerId, extraction.warnings);
+  }
+  return parseSalesGrid(extraction.rows, fallbackDate, sourceFileId, `ocr:${extraction.providerId}`);
 };
 
 export const parseAdsWorkbook = async (

@@ -59,7 +59,7 @@ import {
   saveSalesUpload,
   subscribeToDataChanges
 } from "./lib/storage";
-import { parseAdsWorkbook, parseSalesWorkbook } from "./lib/workbookParsers";
+import { parseAdsWorkbook, parseSalesImage, parseSalesWorkbook } from "./lib/workbookParsers";
 
 const today = new Date().toISOString().slice(0, 10);
 const numberFormat = new Intl.NumberFormat("ar-EG");
@@ -422,17 +422,13 @@ function SalesUploadCard({
 
   const preview = async () => {
     if (!file) return;
-    setMessage("جار قراءة الملف...");
-    if (!isWorkbookFile(file)) {
-      setPeoplePreview([]);
-      setPlatformPreview([]);
-      setErrors(["رفع الصور/screenshot يحتاج OCR موثوق أو إدخال يدوي. هذا المسار يحفظ Excel/CSV فقط حتى لا يتم تسجيل أرقام خاطئة."]);
-      setMessage("لم يتم إنشاء Preview لأن الملف ليس Excel أو CSV.");
-      return;
-    }
     const sourceFileId = createId();
+    const isWorkbook = isWorkbookFile(file);
+    setMessage(isWorkbook ? "جار قراءة الملف..." : "جاري تحليل الصورة بالذكاء الاصطناعي...");
     try {
-      const parsed = await parseSalesWorkbook(file, activeDate, sourceFileId);
+      const parsed = isWorkbook
+        ? await parseSalesWorkbook(file, activeDate, sourceFileId)
+        : await parseSalesImage(file, activeDate, sourceFileId);
       setPeoplePreview(parsed.people);
       setPlatformPreview(parsed.platforms);
       setErrors(parsed.errors);
@@ -441,7 +437,7 @@ function SalesUploadCard({
       setPeoplePreview([]);
       setPlatformPreview([]);
       setErrors([error instanceof Error ? error.message : String(error)]);
-      setMessage("فشل قراءة الملف. راجعي نوع الملف والأعمدة.");
+      setMessage(isWorkbook ? "فشل قراءة الملف. راجعي نوع الملف والأعمدة." : "فشلت قراءة الصورة. جربي صورة أوضح أو ارفعي Excel/CSV.");
     }
   };
 
