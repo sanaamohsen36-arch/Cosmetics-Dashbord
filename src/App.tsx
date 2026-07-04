@@ -55,6 +55,7 @@ import {
   loadData,
   saveAdsUpload,
   saveData,
+  saveMasterDataAdditions,
   saveSalesUpload,
   subscribeToDataChanges
 } from "./lib/storage";
@@ -246,7 +247,6 @@ function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: App
     if (!confirmed) return;
     const next = await deleteRawFile(data, existingFile.id);
     setData(next);
-    await saveData(next);
     setStatusMessage("تم حذف ملف المبيعات وبياناته لهذا اليوم.");
   };
 
@@ -303,7 +303,6 @@ function AdsFolderPage({ data, setData }: { data: AppData; setData: (data: AppDa
     if (!confirmed) return;
     const next = await deleteRawFile(data, fileId);
     setData(next);
-    await saveData(next);
     setStatusMessage("تم حذف ملف الإعلانات والصفوف المرتبطة به فقط.");
   };
 
@@ -463,9 +462,12 @@ function SalesUploadCard({
     const people = normalizePeopleRows(peoplePreview, activeDate, sourceFileId, now);
     const platforms = normalizePlatformRows(platformPreview, activeDate, sourceFileId, now);
     const enriched = syncMasterData(data, people, platforms);
+    const newPlatformSettings = enriched.platformSettings.slice(data.platformSettings.length);
+    const newSalespeople = enriched.salespeople.slice(data.salespeople.length);
+    const newPlatforms = enriched.platforms.slice(data.platforms.length);
     const next = await saveSalesUpload(enriched, rawFile, people, platforms, existing ? "replace" : "merge");
+    await saveMasterDataAdditions(newPlatformSettings, newSalespeople, newPlatforms);
     setData(next);
-    await saveData(next);
     setMessage(existing ? "تم استبدال بيانات المبيعات لهذا التاريخ." : "تم حفظ بيانات المبيعات.");
     setIsSaving(false);
   };
@@ -579,7 +581,6 @@ function AdsUploadCard({
     }));
     const next = await saveAdsUpload(data, rawFile, normalizedRows, platform, "merge");
     setData(next);
-    await saveData(next);
     setMessage(`تم حفظ ملف ${selectedAdsPlatform} بدون حذف الملفات الأخرى لنفس اليوم.`);
     setIsSaving(false);
   };

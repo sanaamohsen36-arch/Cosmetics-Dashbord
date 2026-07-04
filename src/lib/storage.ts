@@ -157,6 +157,20 @@ export const saveData = async (data: AppData) => {
   await refreshDailySummary(data);
 };
 
+// Additive-only persistence for salesperson/platform names newly discovered while
+// parsing an upload. Unlike saveData(), this never touches unrelated tables, so it
+// is safe to call after a targeted upload/delete without risking other users' data.
+export const saveMasterDataAdditions = async (
+  newPlatformSettings: PlatformSetting[],
+  newSalespeople: SalespersonMaster[],
+  newPlatforms: PlatformMaster[]
+) => {
+  if (!supabase) return;
+  await insertRows("platform_settings", newPlatformSettings.map(toPlatformSettingRow));
+  await insertOptionalRows("salespeople", newSalespeople.map(toSalespersonMasterRow));
+  await insertOptionalRows("platforms", newPlatforms.map(toPlatformMasterRow));
+};
+
 export const subscribeToDataChanges = (onChange: () => void) => {
   if (!supabase) return () => undefined;
 
