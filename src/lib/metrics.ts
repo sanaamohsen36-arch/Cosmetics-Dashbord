@@ -105,6 +105,20 @@ export const aggregatePlatforms = (rows: SalesByPlatform[]) => {
   return [...map.values()].sort((a, b) => b.totalRevenue - a.totalRevenue);
 };
 
+export const aggregateAdsByPlatform = (rows: AdsRow[]) => {
+  const map = new Map<string, { platform: string; spend: number; messages: number; comments: number; results: number }>();
+  for (const row of rows) {
+    const platform = row.adAccountName || row.adsPlatform;
+    const item = map.get(platform) ?? { platform, spend: 0, messages: 0, comments: 0, results: 0 };
+    item.spend += row.spend;
+    item.messages += Number(row.messagesCount) || 0;
+    item.comments += Number(row.commentsCount) || 0;
+    item.results += Number(row.resultsCount) || row.leads || row.purchases || 0;
+    map.set(platform, item);
+  }
+  return [...map.values()].sort((a, b) => b.spend - a.spend);
+};
+
 export const aggregateAdsByDate = (ads: AdsRow[]) => {
   const map = new Map<string, { date: string; metaSpend: number; tiktokSpend: number; totalSpend: number }>();
   for (const row of ads) {
