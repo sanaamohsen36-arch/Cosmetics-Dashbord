@@ -1038,6 +1038,22 @@ tr.suspicious td {
   margin-top: 18px;
 }
 
+.role-placeholder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.role-placeholder-card {
+  border: 1px dashed #334155;
+  border-radius: 8px;
+  padding: 14px;
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+  opacity: 0.75;
+}
+
 .toggle-row {
   border: 1px solid #253246;
   border-radius: 8px;
