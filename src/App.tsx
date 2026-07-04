@@ -60,7 +60,7 @@ import {
   saveMasterDataAdditions,
   saveSalesUpload,
   subscribeToDataChanges
-} from "./lib/storage";
+} from "./lib/supabase";
 import {
   applyPageCorrections,
   applySalespersonCorrections,

@@ -1,6 +1,6 @@
 import * as XLSX from "xlsx";
 import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
-import { createId } from "./storage";
+import { createId } from "./supabase";
 import { normalizeArabicText } from "./normalize";
 import { requestOcrExtraction } from "./ocr/client";
 

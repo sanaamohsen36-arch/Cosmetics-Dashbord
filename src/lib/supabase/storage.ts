@@ -12,9 +12,9 @@ import type {
   SalespersonMaster,
   SalesRawFile,
   UploadMode
-} from "../types";
-import { isSubtotalPlatformName } from "./metrics";
-import { isSupabaseConfigured, supabase } from "./supabase";
+} from "../../types";
+import { isSubtotalPlatformName } from "../metrics";
+import { isSupabaseConfigured, supabase } from "./client";
 
 const STORAGE_KEY = "daily-report-dashboard-v1";
 
