@@ -42,12 +42,19 @@ Done, on branch `claude/fix-dashboard-system`:
    the first implementation, wired into Sales image uploads, keeping the API
    key server-side only.
 5. Recreated the missing `.env.example`.
+6. Fixed the P2 name/platform normalization bug: `aggregatePeople`/
+   `aggregatePlatforms` now key on a shared `normalizeArabicText()`
+   (`src/lib/normalize.ts`) instead of raw text, so the same person/page
+   typed with a stray space or a different Arabic letter variant across
+   different days' uploads merges instead of fragmenting.
+7. Fixed the P2 local-midnight date bug: `today`/`toDateInput` now build
+   calendar dates from local `getFullYear`/`getMonth`/`getDate` instead of
+   `toISOString()`, which rendered in UTC and could report yesterday's date
+   for the first couple of hours after local midnight in Cairo (UTC+2/+3).
 
 Planned, not yet implemented (this document describes the target so all of
 this can proceed without re-litigating structure):
 
-- Name/platform normalization for cross-day aggregation (P2 bug).
-- Local-midnight date bug fix (P2 bug).
 - Migration from the current flat Supabase schema to the normalized
   brand/file/data schema described below.
 - Splitting the current single-file `src/App.tsx` (1,300+ lines) into the
@@ -385,21 +392,19 @@ dataset filtered to the selected date range:
 - **Best-performer labels** (top salesperson/platform by orders/revenue) are
   derived from the same aggregation, not queried separately.
 
-**Known unresolved issue (planned fix, not yet done)**: `aggregatePeople`
-and `aggregatePlatforms` key by raw `salespersonCode-salespersonName` /
-raw `platformName` with no normalization across different days' uploads.
-A name typed with a stray space or a different Arabic letter variant on two
-different days currently produces two separate rows instead of merging.
-The planned fix shares a normalization helper between parsing (already
-partially normalizes for header matching) and aggregation (currently does
-not normalize at all).
+**Fixed** (see History): `aggregatePeople`/`aggregatePlatforms` previously
+keyed by raw `salespersonCode-salespersonName`/raw `platformName` with no
+normalization, so the same name typed with a stray space or a different
+Arabic letter variant on two different days produced two separate rows
+instead of merging. Both now key on the shared `normalizeArabicText()`
+(`src/lib/normalize.ts`), also used by parsing's header/row matching.
 
-**Known unresolved issue (planned fix)**: date values throughout the app
-(`today`, `toDateInput`, calendar day generation) are built via
-`new Date(...).toISOString().slice(0,10)`, which always renders in UTC. For
-any timezone ahead of UTC (Cairo is UTC+2), the first ~2 hours after local
-midnight can report yesterday's date. Planned fix: compute local dates
-without the UTC round-trip.
+**Fixed** (see History): date values throughout the app (`today`,
+`toDateInput`, calendar day generation) were built via
+`new Date(...).toISOString().slice(0,10)`, which always renders in UTC and
+could report yesterday's date for the first couple of hours after local
+midnight in Cairo (UTC+2/+3). Both now build local dates from
+`getFullYear`/`getMonth`/`getDate`, no UTC round-trip.
 
 **New requirement from file versioning (section 15)**: once versioning
 lands, every aggregation/report query must filter to `is_current = true`
