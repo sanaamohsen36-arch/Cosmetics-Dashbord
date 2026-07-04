@@ -50,6 +50,12 @@ this can proceed without re-litigating structure):
   no code written yet. These three are interdependent: audit log entries
   need a real "user," which needs auth/roles to exist first; file-version
   restore/purge actions need a capability to gate them.
+- **Backup & Restore strategy** (section 16) — approved direction as of this
+  revision, no code written yet. Depends on file versioning (section 15,
+  backups must capture superseded versions too) and surfaces a real
+  prerequisite gap: uploaded files are not actually stored as blobs
+  anywhere today (see section 16), so "recoverable file uploads" needs that
+  fixed first.
 
 ---
 
@@ -94,7 +100,9 @@ src/
     api/
       ocr/sales/route.ts      # done
       upload-auth/route.ts
-      (future: assistant/, telegram/, drive-backup/, ads-sync/ ...)
+      backup/run/route.ts      # daily backup job target, section 16
+      backup/restore/route.ts  # Owner-gated restore trigger, section 16
+      (future: assistant/, telegram/, ads-sync/ ...)
   features/
     sales-upload/             # calendar, preview tables, save/delete/replace logic
     ads-upload/                # brand+platform tabs, multi-file preview, save/delete
@@ -109,6 +117,7 @@ src/
     brands/                     # brand master data (planned, multi-brand)
     permissions/                 # role -> capability map (section 13)
     audit/                       # centralized logAction() helper (section 14)
+    backup/                      # BackupDestination interface + run/restore orchestration (section 16)
   types/                       # domain types, split per feature where useful
 ```
 
@@ -151,7 +160,7 @@ Planned migration path:
    needs a product decision on whether one company's daily sales report can
    ever span multiple brands in one file, or whether brand is always
    Sales-Upload's first selector too, mirroring Ads Upload. **Open question,
-   to confirm before multi-brand work starts** (section 16).
+   to confirm before multi-brand work starts** (section 17).
 3. Add the tables and columns introduced by this revision:
    - `profiles` (section 13) — one row per authenticated user, holding role.
    - `audit_log` (section 14) — append-only action log.
@@ -159,6 +168,8 @@ Planned migration path:
      `version`, `is_current`, `superseded_at`, `superseded_by`, plus
      replacing their plain unique constraints with partial unique indexes
      scoped to `is_current`.
+   - `backup_runs` (section 16) — one row per daily/manual backup attempt,
+     so retention pruning and restore both know what snapshots exist.
 4. Update `src/lib/supabase/` (new home for storage functions) to read/write
    the normalized tables; keep the flat tables in place but unused during a
    transition window.
@@ -387,6 +398,9 @@ never be double-counted alongside their replacement.
 | `GEMINI_API_KEY` | Yes, if using Gemini OCR | **No — server-only** | Gemini Vision API key, read only inside `src/app/api/ocr/sales/route.ts` |
 | `GEMINI_OCR_MODEL` | No (defaults to `gemini-2.0-flash`) | No | Overrides the Gemini model name |
 | `UPLOAD_PASSWORD` | No | No | Optional shared password gate, checked by `src/app/api/upload-auth/route.ts`. Superseded in spirit by real per-user auth (section 13), but left as-is until that lands. |
+| `BACKUP_STORAGE_PROVIDER` | Planned, needed once section 16 lands | No | Selects the backup destination (defaults to Supabase Storage), same pattern as `OCR_PROVIDER` |
+| `BACKUP_CRON_SECRET` | Planned | **No — server-only** | Shared secret the daily Vercel Cron request must present to `app/api/backup/run`, so the endpoint can't be triggered by anyone who finds the URL |
+| *(destination-specific, e.g. `GOOGLE_DRIVE_SERVICE_ACCOUNT_KEY`, `BACKUP_S3_*`)* | Only if a non-Supabase destination is configured | **No — server-only** | Credentials for whichever `BackupDestination` is active |
 
 Rule: any future secret (Telegram bot token, n8n webhook secret, Google
 Drive service-account key, Meta/TikTok API tokens) follows the same pattern
@@ -427,8 +441,8 @@ only inside an API route, never a `NEXT_PUBLIC_*` variable.
 ```
 
 **Target**, once the module migration (section 2) lands — see section 2 for
-the full tree, now including `lib/permissions/` and `lib/audit/`; only
-`app/`, `features/*`, `lib/*`, and `types/` change.
+the full tree, now including `lib/permissions/`, `lib/audit/`, and
+`lib/backup/`; only `app/`, `features/*`, `lib/*`, and `types/` change.
 
 ---
 
@@ -470,6 +484,14 @@ the full tree, now including `lib/permissions/` and `lib/audit/`; only
 - **Branch/deploy discipline**: no direct commits to `main`; all work on
   feature branches; push and Vercel preview only after explicit confirmation
   (already the working agreement for this project).
+- **Backup retention policy and destinations** (section 16) — changing how
+  long backups are kept, or where they're stored, is a deliberate,
+  Owner-approved decision, not an incidental config tweak.
+- **Restoring from a backup is the one sanctioned exception to "no
+  full-table wipes"** (section 16), and only through the dedicated,
+  Owner-gated restore path — never as a side effect of a normal save, and
+  never silently reachable from application code that isn't the restore
+  route itself.
 
 ---
 
@@ -515,6 +537,9 @@ reports.view
 audit_log.view
 file_versions.view
 file_versions.restore
+backup.run_manual
+backup.restore
+backup.view_history
 ```
 
 **Proposed default role → capability matrix.** This is a starting point for
@@ -535,6 +560,8 @@ implementation:
 | audit_log.view | ✅ | ✅ | | | | |
 | file_versions.view | ✅ | ✅ | ✅ | ✅ | | |
 | `*.purge_version` | ✅ | | | | | |
+| backup.run_manual / backup.restore | ✅ | | | | | |
+| backup.view_history | ✅ | ✅ | | | | |
 
 **Enforcement happens in two layers, and only one of them is real security:**
 
@@ -653,7 +680,109 @@ is visually distinct (destructive styling) from the normal delete action.
 
 ---
 
-## 16. Future modules (planned hook points, not built yet)
+## 16. Backup & Restore Strategy
+
+**Prerequisite gap this surfaces**: today, uploaded files are not actually
+stored anywhere as blobs. `SalesRawFile.filePath`/`AdsRawFile.filePath` are
+set to `file.name` — just the original filename string — never an actual
+upload to Supabase Storage or any object store. Only the *parsed, structured*
+data (salespeople/platform/ads rows) is persisted. This means "file uploads
+must be recoverable" cannot be satisfied until raw file blobs are actually
+stored somewhere at upload time. This section assumes that gap is closed
+first: every Sales/Ads upload writes its original file to a Supabase Storage
+bucket, and `file_path` becomes a real storage reference instead of a bare
+filename.
+
+**Scope of what gets backed up:**
+
+1. **Database data** — every table (both schemas during the transition
+   window, section 3): sales/ads structured rows, file version history
+   (section 15), master data (salespeople/platforms/brands), mapping-memory
+   corrections, `profiles`, and the `audit_log` itself.
+2. **Original uploaded files** — the raw Excel/CSV/image blobs, once stored
+   per the prerequisite above.
+3. **Metadata** — file records (including superseded versions, not just
+   current), so a restore can reconstruct exactly what a user saw at any
+   point in time, not just today's state.
+
+**Pluggable backup destination**, mirroring the OCR provider pattern
+(section 5) rather than hardcoding one vendor:
+
+```ts
+interface BackupDestination {
+  readonly id: string;
+  upload(objectKey: string, data: Buffer, contentType: string): Promise<{ locationRef: string }>;
+  list(prefix: string): Promise<Array<{ locationRef: string; sizeBytes: number; createdAt: string }>>;
+  download(locationRef: string): Promise<Buffer>;
+  delete(locationRef: string): Promise<void>; // used by retention pruning
+}
+```
+
+Primary implementation: Supabase Storage (already in the stack, no new
+vendor needed to satisfy "should work with Supabase"). A second destination
+(Google Drive, S3, Google Cloud Storage) can be added later as a true
+off-project copy — important because a backup that lives only inside the
+same Supabase project doesn't protect against losing that project itself.
+**Recommendation**: once this is built, configure a second destination for
+redundancy rather than relying on Supabase Storage alone; which one is a
+cost/ops decision for the Owner, not decided here.
+
+**Orchestration**: `lib/backup/runBackup()` — exports every table to JSON,
+uploads the bundle plus any file blobs not yet backed up, records the result
+in `backup_runs` (id, started_at, completed_at, status, destination,
+location_ref, table_row_counts, file_count, triggered_by). Triggered by:
+
+- **Daily automatic run** — Vercel Cron hits `app/api/backup/run`, guarded
+  by `BACKUP_CRON_SECRET` (section 10) so it can't be triggered externally.
+- **On-demand run** — Owner-only (`backup.run_manual`, section 13), e.g.
+  before a risky schema migration.
+
+**Backup frequency**: daily, at a fixed low-traffic time (proposed 03:00
+Cairo time). Adjustable, but "daily" is the floor per the requirement.
+
+**Retention policy** (proposed default, adjustable by the Owner — same
+caveat as the permissions matrix in section 13):
+
+| Tier | Keep |
+|---|---|
+| Daily | Every daily backup for 14 days |
+| Weekly | One backup per week for 8 weeks |
+| Monthly | One backup per month for 12 months |
+
+Pruning runs as part of the same daily job, using `backup_runs` to know what
+exists and what's now outside every tier's window.
+
+**Recovery process** — two distinct scenarios, not to be confused:
+
+1. **Routine "I made a mistake" recovery** — handled by file versioning
+   (section 15) directly in the app: view/inspect a prior version, no
+   backup restore needed. This is the common case and is self-service.
+2. **Disaster recovery** (Supabase project lost/corrupted, accidental
+   truncation outside the app, or a schema migration gone wrong) — a
+   deliberate, Owner-gated restore via `app/api/backup/restore`
+   (`backup.restore`, section 13):
+   1. Identify the target snapshot from `backup_runs`.
+   2. Point the restore at a ready-to-receive Supabase project (the original,
+      repaired, or a fresh one).
+   3. Truncate only the specific target tables being restored, then reinsert
+      every row from the snapshot — this is the **one sanctioned exception**
+      to the "no full-table wipes" guardrail (section 12), reachable only
+      through this dedicated route, never as a side effect of a normal save.
+   4. Re-upload/re-link file blobs from the backup destination back into
+      Supabase Storage.
+   5. Verify row counts against the snapshot's recorded `table_row_counts`.
+   6. Write an audit log entry (section 14) for the restore itself — who,
+      when, from which snapshot — since this is one of the most consequential
+      actions the system can perform.
+
+**Monitoring**: a failed daily backup should not fail silently. Once the
+Telegram integration (section 17) exists, wire a failure alert to it;
+until then, a failed run is at minimum visible in `backup_runs` for the
+Owner to notice.
+
+---
+
+## 17. Future modules (planned hook points, not built yet)
 
 None of the following are implemented. This section exists so the modular
 structure accommodates them without rework when their time comes.
@@ -676,11 +805,11 @@ structure accommodates them without rework when their time comes.
   rather than the public anon key, since n8n runs server-side and can hold a
   secret safely — likely its own service role under section 13's model,
   logged like any other actor under section 14.
-- **Google Drive backup**: a scheduled job (Vercel Cron or an n8n workflow)
-  exporting raw uploaded files and/or a DB snapshot to Drive via a Google
-  service account. Reads already-saved data (including old versions, per
-  section 15, if a full history backup is wanted); should not sit in the
-  upload-save critical path.
+- **Google Drive backup**: not a separate idea — this is one possible
+  `BackupDestination` implementation for the Backup & Restore architecture
+  in section 16, alongside or instead of Supabase Storage. Adding it later
+  is a new file implementing that interface plus a Google service-account
+  credential, no changes to the backup orchestration itself.
 - **Meta/TikTok API integrations**: direct pulls via the Marketing APIs as an
   alternative to manual CSV upload. In the normalized schema, `ads_data` rows
   would need a `source` field (`manual_upload` vs `api_sync`) so both paths
