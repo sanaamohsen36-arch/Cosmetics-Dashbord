@@ -51,6 +51,13 @@ Done, on branch `claude/fix-dashboard-system`:
    calendar dates from local `getFullYear`/`getMonth`/`getDate` instead of
    `toISOString()`, which rendered in UTC and could report yesterday's date
    for the first couple of hours after local midnight in Cairo (UTC+2/+3).
+8. Wired mapping-memory (section 5): `src/lib/mapping-memory/` applies any
+   previously-saved salesperson/page name correction right after parsing
+   (Excel or OCR), before the preview is shown, and diffs the preview as
+   shown against what's actually saved to capture new manual corrections -
+   via new additive-only `recordSalespersonCorrection`/
+   `recordPageCorrection` in `storage.ts` (increments `usage_count` on a
+   repeat, single insert on a new one, never a full-table write).
 
 Planned, not yet implemented (this document describes the target so all of
 this can proceed without re-litigating structure):
@@ -59,8 +66,6 @@ this can proceed without re-litigating structure):
   brand/file/data schema described below.
 - Splitting the current single-file `src/App.tsx` (1,300+ lines) into the
   feature-module folder structure described below.
-- Mapping-memory wiring (corrections tables exist in the DB today but are
-  not yet read or written by any code path).
 - Multi-brand support beyond Ads (Sales currently has no brand dimension).
 - **User roles & permissions** (section 13), **audit log** (section 14), and
   **file versioning** (section 15) — approved direction as of this revision,
@@ -281,17 +286,17 @@ Upload File (image)
   numeric-validation code as an Excel upload. One set of business rules, two
   entry points.
 
-Planned, not yet built: **mapping-memory** application. `ocr_page_corrections`
-and `ocr_salesperson_corrections` tables exist and are loaded into app state,
-but nothing currently reads from or writes to them. The planned hook point is
-between "Structured JSON" and "Validation": before column/row detection runs,
-look up any known wrong→correct substitutions for salesperson names and page
-names and apply them; when a user manually edits a preview cell whose
-original OCR/parsed value differs, save that correction back to the
-appropriate table (with a `usage_count` increment on repeat, per existing
-schema), and log it via `lib/audit/logAction()` (section 14). This is
-intentionally provider-agnostic — it lives in `lib/mapping-memory/`, not
-inside any OCR provider.
+**Done**: mapping-memory application (see History). `src/lib/mapping-memory/`
+applies any known wrong→correct salesperson/page name substitution right
+after parsing (Excel or OCR), before the preview is shown, and captures new
+corrections by diffing the preview as first shown against what's actually
+saved — additive-only persistence (`usage_count` increments on a repeat)
+via `recordSalespersonCorrection`/`recordPageCorrection` in `storage.ts`.
+Intentionally provider-agnostic, as planned — it lives in
+`lib/mapping-memory/`, not inside any OCR provider. **Not yet done**: logging
+these corrections via `lib/audit/logAction()` (section 14), since the audit
+log itself doesn't exist yet — this will be wired in when section 14 lands,
+per the sequencing already noted in History.
 
 ---
 
