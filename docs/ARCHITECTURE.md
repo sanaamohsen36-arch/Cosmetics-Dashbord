@@ -58,14 +58,23 @@ Done, on branch `claude/fix-dashboard-system`:
    via new additive-only `recordSalespersonCorrection`/
    `recordPageCorrection` in `storage.ts` (increments `usage_count` on a
    repeat, single insert on a new one, never a full-table write).
+9. Modular folder migration (section 2): `src/App.tsx` split from ~1400
+   lines into a 109-line composition shell plus `lib/date.ts`,
+   `lib/format.ts`, `lib/constants.ts`, `lib/ui/` (shared presentational
+   components), and one file per feature under `features/` (sales-upload,
+   ads-upload, dashboard, sales-report, page-report, settings). Deleted
+   confirmed-dead code (`UploadCenter`, `ReportsPage`, `RecentUploadsPanel` -
+   zero reachable callers under the current `PageKey` type). Relocated but
+   did **not** delete or wire in `AdsReportsPage`/`AdsRowView` (now in
+   `features/page-report/`) - section 8's "known gap" is still unresolved,
+   this was a pure reorganization, not a product decision. Verified by build
+   (identical bundle size) and by loading the running app.
 
 Planned, not yet implemented (this document describes the target so all of
 this can proceed without re-litigating structure):
 
 - Migration from the current flat Supabase schema to the normalized
   brand/file/data schema described below.
-- Splitting the current single-file `src/App.tsx` (1,300+ lines) into the
-  feature-module folder structure described below.
 - Multi-brand support beyond Ads (Sales currently has no brand dimension).
 - **User roles & permissions** (section 13), **audit log** (section 14), and
   **file versioning** (section 15) — approved direction as of this revision,
@@ -117,7 +126,8 @@ this can proceed without re-litigating structure):
 
 ## 2. Final module structure
 
-Target layout (migration not yet executed):
+Layout (`app/`, `features/*`, and most of `lib/` done; items marked
+"planned" don't exist yet):
 
 ```
 src/
@@ -127,27 +137,29 @@ src/
     api/
       ocr/sales/route.ts      # done
       upload-auth/route.ts
-      backup/run/route.ts      # daily backup job target, section 16
-      backup/restore/route.ts  # Owner-gated restore trigger, section 16
+      backup/run/route.ts      # planned, section 16
+      backup/restore/route.ts  # planned, section 16
       (future: assistant/, telegram/, ads-sync/ ...)
-  features/
+  features/                   # done
     sales-upload/             # calendar, preview tables, save/delete/replace logic
     ads-upload/                # brand+platform tabs, multi-file preview, save/delete
     dashboard/                  # KPIs, charts, filters
     sales-report/
     page-report/
-    settings/                   # incl. user/role management UI (section 13)
+    settings/                   # will incl. user/role management UI (planned, section 13)
   lib/
-    supabase/                  # one place that talks to Supabase; typed table helpers
-    mapping-memory/             # normalization + correction store (planned, section 5)
+    supabase/                  # done — one place that talks to Supabase; typed table helpers
+    mapping-memory/             # done — normalization + correction store (section 5)
     ocr/                        # done — provider-agnostic interface + adapters
-    brands/                     # brand master data (planned, multi-brand)
-    permissions/                 # role -> capability map (section 13)
-    audit/                       # centralized logAction() helper (section 14)
-    backup/                      # BackupDestination interface + run/restore orchestration (section 16)
-    health/                      # reportHealth() helper + system_health_status reads (section 17)
-    notifications/               # notify() helper + NotificationChannel interface (section 18)
-  types/                       # domain types, split per feature where useful
+    ui/                         # done — shared presentational components (Badge, KpiCard, ChartPanel, SimpleTable, ErrorList, DateFilters, CalendarMonth)
+    date.ts, format.ts, constants.ts  # done — shared date/formatting/config helpers
+    brands/                     # planned — brand master data (multi-brand)
+    permissions/                 # planned — role -> capability map (section 13)
+    audit/                       # planned — centralized logAction() helper (section 14)
+    backup/                      # planned — BackupDestination interface + run/restore orchestration (section 16)
+    health/                      # planned — reportHealth() helper + system_health_status reads (section 17)
+    notifications/               # planned — notify() helper + NotificationChannel interface (section 18)
+  types.ts                    # domain types (not yet split per feature - low priority)
 ```
 
 **Rule going forward**: a feature folder owns its own components and its own
@@ -442,25 +454,34 @@ only inside an API route, never a `NEXT_PUBLIC_*` variable.
 
 ## 11. Folder/file structure
 
-**Current** (as of this freeze):
+**Current**, after the modular migration (History item 9):
 
 ```
 .
 ├── docs/ARCHITECTURE.md          # this file
-├── prisma/                       # removed (was unused)
 ├── src/
-│   ├── App.tsx                   # monolith — all pages/components (target: split, section 2)
+│   ├── App.tsx                   # thin composition shell (~110 lines): state, nav, page switch
 │   ├── app/
 │   │   ├── layout.tsx, page.tsx
 │   │   └── api/
 │   │       ├── ocr/sales/route.ts
 │   │       └── upload-auth/route.ts
+│   ├── features/
+│   │   ├── sales-upload/index.tsx
+│   │   ├── ads-upload/index.tsx
+│   │   ├── dashboard/index.tsx
+│   │   ├── sales-report/index.tsx
+│   │   ├── page-report/index.tsx     # incl. dormant AdsReportsPage, see section 8
+│   │   └── settings/index.tsx
 │   ├── lib/
 │   │   ├── metrics.ts
-│   │   ├── storage.ts            # Supabase read/write (target: move under lib/supabase/)
-│   │   ├── supabase.ts           # client init
+│   │   ├── normalize.ts          # normalizeArabicText, shared by parsing + aggregation
+│   │   ├── date.ts, format.ts, constants.ts
 │   │   ├── workbookParsers.ts    # Excel/CSV + OCR-grid parsing
-│   │   └── ocr/                  # provider interface + Gemini adapter
+│   │   ├── mapping-memory/
+│   │   ├── ocr/                  # provider interface + Gemini adapter
+│   │   ├── supabase/             # client.ts, storage.ts, index.ts barrel
+│   │   └── ui/                   # shared presentational components
 │   ├── types.ts
 │   └── styles.css
 ├── supabase/
@@ -471,10 +492,12 @@ only inside an API route, never a `NEXT_PUBLIC_*` variable.
 ├── next.config.mjs, tsconfig.json, vercel.json, package.json
 ```
 
-**Target**, once the module migration (section 2) lands — see section 2 for
-the full tree, now including `lib/permissions/`, `lib/audit/`,
-`lib/backup/`, `lib/health/`, and `lib/notifications/`; only `app/`,
-`features/*`, `lib/*`, and `types/` change.
+(`prisma/`, `netlify.toml`, and a stale project `.zip` were removed as
+unused before this freeze.)
+
+**Still to add**, once their sections are implemented: `lib/brands/`,
+`lib/permissions/`, `lib/audit/`, `lib/backup/`, `lib/health/`,
+`lib/notifications/` (see section 2 for what each will hold).
 
 ---
 
