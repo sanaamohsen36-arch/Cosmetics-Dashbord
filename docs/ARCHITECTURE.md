@@ -1,18 +1,28 @@
 # Architecture Document
 
-Status: **DRAFT — pending approval.** No new features will be built against
-this document until it is approved. Bug fixes already merged before this
-freeze (see "History" below) are reflected as done; everything else marked
-"planned" is a decision, not yet implemented.
+Status: **FROZEN — approved reference architecture.** Approved in full,
+including sections 13–18 (roles & permissions, audit log, file versioning,
+backup & restore, system health monitoring, notification center). This is
+now the project's reference architecture. Governance from this point
+forward:
+
+- Structural changes (new modules, schema shape, folder layout, provider
+  interfaces) require explicit approval before implementation — this
+  document is not to be silently reinterpreted.
+- New features must conform to this architecture; if a feature seems to
+  need a shortcut that violates it (e.g. a full-table wipe, a hard file
+  delete, an unlogged action), that's a signal to revisit the plan with the
+  Owner, not to route around section 12's guardrails.
+- Commits stay small and documented, same discipline as the work already
+  merged on `claude/fix-dashboard-system`.
+- Sections marked "planned" below are approved designs, not yet
+  implemented; "done" items are already merged. This document is updated
+  whenever a "planned" item is completed (moved to History) or a frozen
+  decision is deliberately revisited with the Owner's sign-off.
 
 This document is the single source of truth for how the Daily Sales + Ads
 Dashboard is structured as it grows into the company's internal BI operating
-system. It reflects decisions already confirmed with the product owner:
-migrate to a normalized, brand-aware database schema; use Gemini Vision as
-the primary OCR engine behind a swappable interface; keep the codebase
-modular so future modules can be added without touching unrelated code;
-and — as of this revision — support role-based permissions, a full audit
-log, and file versioning as first-class architecture, not bolt-ons.
+system.
 
 ---
 
@@ -56,6 +66,11 @@ this can proceed without re-litigating structure):
   prerequisite gap: uploaded files are not actually stored as blobs
   anywhere today (see section 16), so "recoverable file uploads" needs that
   fixed first.
+- **System Health Monitoring** (section 17) and **Notification Center**
+  (section 18) — approved direction as of this revision, no code written
+  yet. Both are cross-cutting: they hook into OCR (section 5), Backup
+  (section 16), and future cron/migration work, and both depend on the
+  `system_health.view`/`notifications.view` capabilities (section 13).
 
 ---
 
@@ -118,6 +133,8 @@ src/
     permissions/                 # role -> capability map (section 13)
     audit/                       # centralized logAction() helper (section 14)
     backup/                      # BackupDestination interface + run/restore orchestration (section 16)
+    health/                      # reportHealth() helper + system_health_status reads (section 17)
+    notifications/               # notify() helper + NotificationChannel interface (section 18)
   types/                       # domain types, split per feature where useful
 ```
 
@@ -160,7 +177,7 @@ Planned migration path:
    needs a product decision on whether one company's daily sales report can
    ever span multiple brands in one file, or whether brand is always
    Sales-Upload's first selector too, mirroring Ads Upload. **Open question,
-   to confirm before multi-brand work starts** (section 17).
+   to confirm before multi-brand work starts** (section 19).
 3. Add the tables and columns introduced by this revision:
    - `profiles` (section 13) — one row per authenticated user, holding role.
    - `audit_log` (section 14) — append-only action log.
@@ -170,6 +187,10 @@ Planned migration path:
      scoped to `is_current`.
    - `backup_runs` (section 16) — one row per daily/manual backup attempt,
      so retention pruning and restore both know what snapshots exist.
+   - `system_health_status` (section 17) — one current-status row per
+     monitored component (OCR, storage, backup, cron, api, per-module sync).
+   - `notifications` (section 18) — actionable alert inbox, distinct from
+     the permanent `audit_log`.
 4. Update `src/lib/supabase/` (new home for storage functions) to read/write
    the normalized tables; keep the flat tables in place but unused during a
    transition window.
@@ -441,8 +462,9 @@ only inside an API route, never a `NEXT_PUBLIC_*` variable.
 ```
 
 **Target**, once the module migration (section 2) lands — see section 2 for
-the full tree, now including `lib/permissions/`, `lib/audit/`, and
-`lib/backup/`; only `app/`, `features/*`, `lib/*`, and `types/` change.
+the full tree, now including `lib/permissions/`, `lib/audit/`,
+`lib/backup/`, `lib/health/`, and `lib/notifications/`; only `app/`,
+`features/*`, `lib/*`, and `types/` change.
 
 ---
 
@@ -492,6 +514,15 @@ the full tree, now including `lib/permissions/`, `lib/audit/`, and
   Owner-gated restore path — never as a side effect of a normal save, and
   never silently reachable from application code that isn't the restore
   route itself.
+- **Notifications (section 18) are never a substitute for the audit log
+  (section 14), and vice versa.** Don't repurpose one table to do the
+  other's job — actions belong in `audit_log` (permanent, immutable);
+  operational alerts belong in `notifications` (ephemeral, actionable).
+- **No swallowed failures.** Any new code path that can fail in a way
+  covered by section 17/18's categories (OCR, backup, upload, migration,
+  storage) must report through `reportHealth()`/`notify()` — catching an
+  error and only logging it to the server console is not sufficient going
+  forward.
 
 ---
 
@@ -540,6 +571,8 @@ file_versions.restore
 backup.run_manual
 backup.restore
 backup.view_history
+system_health.view
+notifications.view
 ```
 
 **Proposed default role → capability matrix.** This is a starting point for
@@ -562,6 +595,8 @@ implementation:
 | `*.purge_version` | ✅ | | | | | |
 | backup.run_manual / backup.restore | ✅ | | | | | |
 | backup.view_history | ✅ | ✅ | | | | |
+| system_health.view | ✅ | ✅ | | | | |
+| notifications.view | ✅ | ✅ | | | | |
 
 **Enforcement happens in two layers, and only one of them is real security:**
 
@@ -775,14 +810,141 @@ exists and what's now outside every tier's window.
       when, from which snapshot — since this is one of the most consequential
       actions the system can perform.
 
-**Monitoring**: a failed daily backup should not fail silently. Once the
-Telegram integration (section 17) exists, wire a failure alert to it;
-until then, a failed run is at minimum visible in `backup_runs` for the
-Owner to notice.
+**Monitoring**: a failed daily backup should not fail silently. `runBackup()`
+reports its outcome to System Health Monitoring (section 17) and, on
+failure, raises a Notification Center alert (section 18) in the `backup`
+category — not just a row in `backup_runs` that someone has to remember to
+check. Once the Telegram integration (section 19) exists, that's an
+additional delivery channel for the same alert, not a replacement for it.
 
 ---
 
-## 17. Future modules (planned hook points, not built yet)
+## 17. System Health Monitoring
+
+**Purpose**: a current-state view of whether each subsystem is healthy right
+now — distinct from the Notification Center (section 18), which is a log of
+things that went wrong that a human needs to act on. Health Monitoring
+answers "is X okay right now"; Notification Center answers "what happened
+and have I dealt with it."
+
+**Components tracked**, matching the request directly: OCR, Storage, Backup,
+Cron, API, and last-successful-sync timestamps per module.
+
+**Storage** — one current-status row per component, upserted in place (not
+an append-only log; that's what `audit_log` and `notifications` are for):
+
+```sql
+create table public.system_health_status (
+  component text primary key,       -- 'ocr.gemini-vision', 'storage', 'backup',
+                                     -- 'cron.backup-daily', 'api', 'sync.sales_upload',
+                                     -- 'sync.ads_upload', ...
+  status text not null check (status in ('ok','degraded','down','unknown')),
+  last_success_at timestamptz,
+  last_failure_at timestamptz,
+  last_error_message text,
+  updated_at timestamptz not null default now()
+);
+```
+
+**Written by**: a single `lib/health/reportHealth(component, status, details)`
+helper, called from the same places that already exist:
+
+- The OCR provider wrapper (section 5) — after every `extractSalesTable`
+  call, success or failure.
+- `runBackup()` (section 16) — after every daily/manual run.
+- Supabase Storage operations (once wired in per section 16's prerequisite)
+  — upload/download failures.
+- Every cron-triggered route (today: backup; future: retention pruning) —
+  on entry (mark running) and exit (mark success/failure), so a cron job
+  that silently stopped firing shows up as a stale `last_success_at`
+  instead of going unnoticed.
+- Sales Upload and Ads Upload save paths — each save/replace updates its own
+  `sync.*` component, which is what "last successful syncs" surfaces.
+
+**Read by**: a `GET /api/health` route that returns every component's status
+in one response — usable both by an in-app panel and by an external uptime
+monitor later. In-app, this lives as a panel inside **Settings** (not a new
+top-level nav item, keeping the required 6-page nav intact), gated by a new
+`system_health.view` capability (section 13) — proposed default Owner +
+Marketing Manager, matching `audit_log.view`.
+
+**Relationship to other sections**: a component transitioning from `ok` to
+`degraded`/`down` is exactly the trigger that raises a Notification Center
+alert (section 18) — health monitoring and notifications are wired together,
+not two places that separately try to detect the same failure.
+
+---
+
+## 18. Notification Center
+
+**Purpose**: every OCR failure, backup failure, upload failure, migration
+error, storage warning, and system alert lands somewhere a human will
+actually see it — not just a `console.error` or a silently-failed row.
+
+**This is deliberately not the same thing as the audit log (section 14).**
+`audit_log` is a permanent, immutable, append-only historical record of
+*actions taken* (who did what, when). `notifications` is a
+day-to-day, markable-as-read inbox of *things that need attention*. Audit
+log entries are never deleted; notifications are ephemeral and may be
+pruned once old and read.
+
+```sql
+create table public.notifications (
+  id uuid primary key default gen_random_uuid(),
+  severity text not null check (severity in ('info','warning','error','critical')),
+  category text not null check (category in ('ocr','backup','upload','migration','storage','system')),
+  title text not null,
+  message text not null,
+  related_entity_type text,
+  related_entity_id text,
+  is_read boolean not null default false,
+  read_at timestamptz,
+  read_by uuid references auth.users(id),
+  created_at timestamptz not null default now()
+);
+```
+
+**Categories map directly to the request**: `ocr` (extraction failures),
+`backup` (failed daily/manual runs), `upload` (Sales/Ads save failures),
+`migration` (schema migration errors, section 3), `storage` (Supabase
+Storage failures/quota warnings), `system` (everything else, including a
+health-status flip to `down`).
+
+**Written by**: a single `lib/notifications/notify(category, severity, title, message, relatedEntity?)`
+helper — the same centralization pattern as `lib/audit/logAction()` and
+`lib/health/reportHealth()`. Called from the same failure points listed in
+section 17, plus schema migration scripts (section 3).
+
+**Delivery is channel-agnostic, following the same plug-in pattern as OCR
+providers (section 5) and backup destinations (section 16)** — this is the
+third instance of that pattern in this architecture, not a one-off:
+
+```ts
+interface NotificationChannel {
+  readonly id: string;
+  send(notification: { severity: string; category: string; title: string; message: string }): Promise<void>;
+}
+```
+
+The in-app channel (writing to the `notifications` table, always on) is the
+only implementation for now. Telegram (section 19) becomes a second channel
+later — `notify()` fans out to every configured channel, so adding Telegram
+is a new file + registration, not a rewrite of every call site.
+
+**Read access**: gated by a new `notifications.view` capability (section 13)
+— proposed default Owner + Marketing Manager, same as `audit_log.view` and
+`system_health.view`. Finer-grained, per-category subscriptions (e.g. a
+Sales Manager only wanting `upload` alerts) are a plausible future
+refinement, not part of this freeze.
+
+**UI**: a small notification indicator (bell/badge) rather than a new
+top-level nav item, consistent with keeping the 6-page nav simple — opens a
+dropdown/panel of recent unread items, with a link into Settings for the
+full history.
+
+---
+
+## 19. Future modules (planned hook points, not built yet)
 
 None of the following are implemented. This section exists so the modular
 structure accommodates them without rework when their time comes.
