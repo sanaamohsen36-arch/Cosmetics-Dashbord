@@ -53,12 +53,20 @@ import {
   getStorageMode,
   deleteRawFile,
   loadData,
+  recordPageCorrection,
+  recordSalespersonCorrection,
   saveAdsUpload,
   saveData,
   saveMasterDataAdditions,
   saveSalesUpload,
   subscribeToDataChanges
 } from "./lib/storage";
+import {
+  applyPageCorrections,
+  applySalespersonCorrections,
+  diffPageCorrections,
+  diffSalespersonCorrections
+} from "./lib/mapping-memory";
 import { parseAdsWorkbook, parseSalesImage, parseSalesWorkbook } from "./lib/workbookParsers";
 
 // Local calendar date, not UTC. date.toISOString() always renders in UTC, so
@@ -418,6 +426,11 @@ function SalesUploadCard({
   const [reportDate, setReportDate] = useState(fixedDate || today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
   const [platformPreview, setPlatformPreview] = useState<SalesByPlatform[]>([]);
+  // Snapshot of the preview as first shown (post-parse, post-mapping-memory),
+  // kept alongside the editable state so save() can tell a genuine manual
+  // name correction apart from an unrelated numeric edit.
+  const [originalPeoplePreview, setOriginalPeoplePreview] = useState<SalesBySalesperson[]>([]);
+  const [originalPlatformPreview, setOriginalPlatformPreview] = useState<SalesByPlatform[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -434,13 +447,19 @@ function SalesUploadCard({
       const parsed = isWorkbook
         ? await parseSalesWorkbook(file, activeDate, sourceFileId)
         : await parseSalesImage(file, activeDate, sourceFileId);
-      setPeoplePreview(parsed.people);
-      setPlatformPreview(parsed.platforms);
+      const correctedPeople = applySalespersonCorrections(parsed.people, data.ocrSalespersonCorrections);
+      const correctedPlatforms = applyPageCorrections(parsed.platforms, data.ocrPageCorrections);
+      setPeoplePreview(correctedPeople);
+      setPlatformPreview(correctedPlatforms);
+      setOriginalPeoplePreview(correctedPeople);
+      setOriginalPlatformPreview(correctedPlatforms);
       setErrors(parsed.errors);
       setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
     } catch (error) {
       setPeoplePreview([]);
       setPlatformPreview([]);
+      setOriginalPeoplePreview([]);
+      setOriginalPlatformPreview([]);
       setErrors([error instanceof Error ? error.message : String(error)]);
       setMessage(isWorkbook ? "فشل قراءة الملف. راجعي نوع الملف والأعمدة." : "فشلت قراءة الصورة. جربي صورة أوضح أو ارفعي Excel/CSV.");
     }
@@ -460,12 +479,26 @@ function SalesUploadCard({
       ocrStatus: "success",
       createdAt: now
     };
+
+    let workingData = data;
+    for (const correction of diffSalespersonCorrections(originalPeoplePreview, peoplePreview)) {
+      workingData = await recordSalespersonCorrection(
+        workingData,
+        correction.wrongValue,
+        correction.correctValue,
+        correction.salespersonCode
+      );
+    }
+    for (const correction of diffPageCorrections(originalPlatformPreview, platformPreview)) {
+      workingData = await recordPageCorrection(workingData, correction.wrongValue, correction.correctValue);
+    }
+
     const people = normalizePeopleRows(peoplePreview, activeDate, sourceFileId, now);
     const platforms = normalizePlatformRows(platformPreview, activeDate, sourceFileId, now);
-    const enriched = syncMasterData(data, people, platforms);
-    const newPlatformSettings = enriched.platformSettings.slice(data.platformSettings.length);
-    const newSalespeople = enriched.salespeople.slice(data.salespeople.length);
-    const newPlatforms = enriched.platforms.slice(data.platforms.length);
+    const enriched = syncMasterData(workingData, people, platforms);
+    const newPlatformSettings = enriched.platformSettings.slice(workingData.platformSettings.length);
+    const newSalespeople = enriched.salespeople.slice(workingData.salespeople.length);
+    const newPlatforms = enriched.platforms.slice(workingData.platforms.length);
     const next = await saveSalesUpload(enriched, rawFile, people, platforms, existing ? "replace" : "merge");
     await saveMasterDataAdditions(newPlatformSettings, newSalespeople, newPlatforms);
     setData(next);

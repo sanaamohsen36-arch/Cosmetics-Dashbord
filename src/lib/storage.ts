@@ -171,6 +171,90 @@ export const saveMasterDataAdditions = async (
   await insertOptionalRows("platforms", newPlatforms.map(toPlatformMasterRow));
 };
 
+// Mapping memory: remembers a user's manual correction of a parsed
+// salesperson/page name so future uploads apply it automatically instead of
+// asking the user to fix the same OCR/typo mistake every time. Repeated
+// corrections of the same wrong value bump usage_count on the existing row
+// instead of inserting a duplicate - additive/targeted only, no full-table
+// writes.
+export const recordSalespersonCorrection = async (
+  data: AppData,
+  wrongValue: string,
+  correctValue: string,
+  salespersonCode: string
+): Promise<AppData> => {
+  const existing = data.ocrSalespersonCorrections.find(
+    (item) => item.wrongValue === wrongValue && item.salespersonCode === salespersonCode
+  );
+  const now = new Date().toISOString();
+
+  if (existing) {
+    const updated: OcrSalespersonCorrection = { ...existing, correctValue, usageCount: existing.usageCount + 1 };
+    const next = {
+      ...data,
+      ocrSalespersonCorrections: data.ocrSalespersonCorrections.map((item) => (item.id === existing.id ? updated : item))
+    };
+    if (!supabase) {
+      saveLocalData(next);
+      return next;
+    }
+    const { error } = await supabase
+      .from("ocr_salesperson_corrections")
+      .update({ correct_value: updated.correctValue, usage_count: updated.usageCount })
+      .eq("id", existing.id);
+    if (error && !isMissingTableError(error)) throw error;
+    return next;
+  }
+
+  const created: OcrSalespersonCorrection = {
+    id: createId(),
+    wrongValue,
+    correctValue,
+    salespersonCode,
+    createdAt: now,
+    usageCount: 1
+  };
+  const next = { ...data, ocrSalespersonCorrections: [...data.ocrSalespersonCorrections, created] };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await insertOptionalRows("ocr_salesperson_corrections", [toOcrSalespersonCorrectionRow(created)]);
+  return next;
+};
+
+export const recordPageCorrection = async (data: AppData, wrongValue: string, correctValue: string): Promise<AppData> => {
+  const existing = data.ocrPageCorrections.find((item) => item.wrongValue === wrongValue);
+  const now = new Date().toISOString();
+
+  if (existing) {
+    const updated: OcrPageCorrection = { ...existing, correctValue, usageCount: existing.usageCount + 1 };
+    const next = {
+      ...data,
+      ocrPageCorrections: data.ocrPageCorrections.map((item) => (item.id === existing.id ? updated : item))
+    };
+    if (!supabase) {
+      saveLocalData(next);
+      return next;
+    }
+    const { error } = await supabase
+      .from("ocr_page_corrections")
+      .update({ correct_value: updated.correctValue, usage_count: updated.usageCount })
+      .eq("id", existing.id);
+    if (error && !isMissingTableError(error)) throw error;
+    return next;
+  }
+
+  const created: OcrPageCorrection = { id: createId(), wrongValue, correctValue, createdAt: now, usageCount: 1 };
+  const next = { ...data, ocrPageCorrections: [...data.ocrPageCorrections, created] };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await insertOptionalRows("ocr_page_corrections", [toOcrPageCorrectionRow(created)]);
+  return next;
+};
+
 export const subscribeToDataChanges = (onChange: () => void) => {
   if (!supabase) return () => undefined;
 
