@@ -545,7 +545,17 @@ function AdsUploadCard({
     if (!file) return;
     setMessage("جار قراءة ملف الإعلانات...");
     const parsed = await parseAdsWorkbook(file, platform, activeDate, createId());
-    setRows(parsed.rows.map((row) => ({ ...row, salesPlatformName: brandName, adAccountName: selectedAdsPlatform })));
+    setRows(
+      parsed.rows.map((row) => ({
+        ...row,
+        salesPlatformName: brandName,
+        adAccountName: selectedAdsPlatform,
+        // Resolve the "results" style column (messages/leads/purchases) once, here,
+        // so the preview table shows the real value and is editable like any other field.
+        leads: Number(row.resultsCount) || row.leads || row.purchases || 0,
+        cpc: Number(row.costPerResult) || row.cpc || 0
+      }))
+    );
     setErrors(parsed.errors);
     setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
   };
@@ -575,9 +585,7 @@ function AdsUploadCard({
       sourceFileId,
       createdAt: now,
       salesPlatformName: brandName,
-      adAccountName: selectedAdsPlatform,
-      leads: Number(row.resultsCount) || row.leads || row.purchases || 0,
-      cpc: Number(row.costPerResult) || row.cpc || 0
+      adAccountName: selectedAdsPlatform
     }));
     const next = await saveAdsUpload(data, rawFile, normalizedRows, platform, "merge");
     setData(next);
