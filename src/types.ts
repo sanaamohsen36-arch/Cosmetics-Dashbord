@@ -1,6 +1,6 @@
 export type AdsPlatform = "Meta" | "TikTok";
 export type UploadMode = "replace" | "merge" | "cancel";
-export type PageKey = "dashboard" | "upload" | "sales-folder" | "ads-folder" | "reports" | "settings";
+export type PageKey = "dashboard" | "sales-upload" | "ads-upload" | "sales-report" | "page-report" | "settings";
 export type SalesRowType = "normal" | "subtotal" | "grand_total";
 export type SalesGroupType = "social" | "follow_up" | "other";
 export type OcrFieldConfidence = Record<string, number>;

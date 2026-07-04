@@ -61,6 +61,12 @@ button:disabled {
   font-weight: 800;
 }
 
+.ghost {
+  background: transparent;
+  color: #b8c4d4;
+  border-color: #334155;
+}
+
 input,
 select {
   width: 100%;
@@ -470,6 +476,15 @@ input[type="file"] {
 .file-status-card small {
   color: #64748b;
   margin-top: 4px;
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 0;
 }
 
 .status-line {

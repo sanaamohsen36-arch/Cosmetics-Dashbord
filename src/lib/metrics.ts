@@ -14,7 +14,7 @@ const normalizePlatformName = (name: string) =>
 
 export const isSubtotalPlatformName = (name: string) => {
   const normalized = normalizePlatformName(name);
-  return normalized === "اجمالي السوشيال" || normalized === "اجمالي اليوم";
+  return normalized === "اجمالي السوشيال" || normalized === "اجمالي المتابعة" || normalized === "اجمالي اليوم" || normalized.includes("اجمالي");
 };
 
 export const getAllAdsRows = (data: AppData) => [...data.metaAds, ...data.tiktokAds];
@@ -23,7 +23,7 @@ export const filterPeople = (data: AppData, range: DateRange) =>
   data.salesBySalesperson.filter((row) => inRange(row.reportDate, range));
 
 export const filterPlatforms = (data: AppData, range: DateRange) =>
-  data.salesByPlatform.filter((row) => inRange(row.reportDate, range) && !isSubtotalPlatformName(row.platformName));
+  data.salesByPlatform.filter((row) => inRange(row.reportDate, range) && row.rowType !== "subtotal" && row.rowType !== "grand_total" && !isSubtotalPlatformName(row.platformName));
 
 export const filterAds = (data: AppData, range: DateRange) => getAllAdsRows(data).filter((row) => inRange(row.reportDate, range));
 
@@ -90,7 +90,7 @@ export const aggregatePeople = (rows: SalesBySalesperson[]) => {
 
 export const aggregatePlatforms = (rows: SalesByPlatform[]) => {
   const map = new Map<string, SalesByPlatform>();
-  for (const row of rows.filter((item) => !isSubtotalPlatformName(item.platformName))) {
+  for (const row of rows.filter((item) => item.rowType !== "subtotal" && item.rowType !== "grand_total" && !isSubtotalPlatformName(item.platformName))) {
     const key = row.platformName;
     const existing = map.get(key);
     if (!existing) {

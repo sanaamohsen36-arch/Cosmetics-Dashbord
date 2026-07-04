@@ -21,6 +21,7 @@ import {
   LayoutDashboard,
   Save,
   Settings,
+  Trash2,
   UploadCloud,
   UserCircle,
   Users
@@ -50,6 +51,7 @@ import {
   createId,
   emptyData,
   getStorageMode,
+  deleteRawFile,
   loadData,
   saveAdsUpload,
   saveData,
@@ -69,11 +71,11 @@ const brandOptions = ["ريجينكس", "ريجينكس eg", "واتساب ري�
 const adsPlatformOptions = ["Facebook Ads", "Instagram Ads", "WhatsApp Ads", "TikTok Ads", "WhatsApp TikTok Ads", "Other"];
 
 const navItems: Array<{ key: PageKey; label: string; icon: ReactNode }> = [
-  { key: "dashboard", label: "Dashboard", icon: <LayoutDashboard size={18} /> },
-  { key: "upload", label: "Upload Center", icon: <UploadCloud size={18} /> },
-  { key: "sales-folder", label: "Sales Folder", icon: <FolderOpen size={18} /> },
-  { key: "ads-folder", label: "Ads Folder", icon: <FolderOpen size={18} /> },
-  { key: "reports", label: "Reports", icon: <Users size={18} /> },
+  { key: "dashboard", label: "Home Dashboard", icon: <LayoutDashboard size={18} /> },
+  { key: "sales-upload", label: "Sales Upload", icon: <UploadCloud size={18} /> },
+  { key: "ads-upload", label: "Ads Upload", icon: <FolderOpen size={18} /> },
+  { key: "sales-report", label: "Sales Report", icon: <Users size={18} /> },
+  { key: "page-report", label: "Page Report", icon: <BarChart3 size={18} /> },
   { key: "settings", label: "Settings", icon: <Settings size={18} /> }
 ];
 
@@ -144,10 +146,10 @@ export default function DashboardApp() {
         </header>
 
         {page === "dashboard" && <DashboardPage data={data} range={range} />}
-        {page === "upload" && <UploadCenter data={data} setPage={setPage} />}
-        {page === "sales-folder" && <SalesFolderPage data={data} setData={setData} />}
-        {page === "ads-folder" && <AdsFolderPage data={data} setData={setData} />}
-        {page === "reports" && <ReportsPage data={data} range={range} setRange={setRange} />}
+        {page === "sales-upload" && <SalesFolderPage data={data} setData={setData} />}
+        {page === "ads-upload" && <AdsFolderPage data={data} setData={setData} />}
+        {page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
+        {page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
         {page === "settings" && <SettingsPage data={data} commitData={commitData} />}
       </main>
     </div>
@@ -201,7 +203,7 @@ function UploadCenter({
             <p>Calendar folder: ملف مبيعات نهائي واحد لكل يوم مع Preview قبل الحفظ.</p>
           </div>
         </div>
-        <button className="primary" onClick={() => setPage("sales-folder")}>Open Sales Folder</button>
+        <button className="primary" onClick={() => setPage("sales-upload")}>Open Sales Folder</button>
       </section>
       <section className="panel folder-card">
         <div className="section-title">
@@ -211,7 +213,7 @@ function UploadCenter({
             <p>Brand folder: اختاري brand ثم اليوم ثم منصة الإعلان، مع أكثر من منصة في نفس اليوم.</p>
           </div>
         </div>
-        <button className="primary" onClick={() => setPage("ads-folder")}>Open Ads Folder</button>
+        <button className="primary" onClick={() => setPage("ads-upload")}>Open Ads Folder</button>
       </section>
       <RecentUploadsPanel data={data} />
       <section className="panel wide">
@@ -235,8 +237,18 @@ function UploadCenter({
 
 function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
   const [selectedDate, setSelectedDate] = useState(today);
+  const [statusMessage, setStatusMessage] = useState("");
   const uploadedDates = new Set(data.salesRawFiles.map((file) => file.reportDate));
   const existingFile = data.salesRawFiles.find((file) => file.reportDate === selectedDate);
+  const deleteExistingFile = async () => {
+    if (!existingFile) return;
+    const confirmed = window.confirm(`Delete saved sales data for ${selectedDate}?`);
+    if (!confirmed) return;
+    const next = await deleteRawFile(data, existingFile.id);
+    setData(next);
+    await saveData(next);
+    setStatusMessage("تم حذف ملف المبيعات وبياناته لهذا اليوم.");
+  };
 
   return (
     <div className="dashboard-stack">
@@ -258,11 +270,18 @@ function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: App
               <strong>{existingFile.fileName}</strong>
               <small>{new Date(existingFile.uploadedAt).toLocaleString("ar-EG")}</small>
             </div>
-            <Badge text="Saved" />
+            <div className="actions">
+              <Badge text="Saved" />
+              <button className="ghost" onClick={deleteExistingFile}>
+                <Trash2 size={16} />
+                Delete
+              </button>
+            </div>
           </div>
         ) : (
           <p className="status-line">لا يوجد ملف محفوظ لهذا اليوم.</p>
         )}
+        {statusMessage && <p className="status-line">{statusMessage}</p>}
         <SalesUploadCard data={data} setData={setData} fixedDate={selectedDate} compact />
       </section>
     </div>
@@ -274,10 +293,19 @@ function AdsFolderPage({ data, setData }: { data: AppData; setData: (data: AppDa
   const [brand, setBrand] = useState(knownBrands[0] || brandOptions[0]);
   const [selectedDate, setSelectedDate] = useState(today);
   const [platformName, setPlatformName] = useState(adsPlatformOptions[0]);
+  const [statusMessage, setStatusMessage] = useState("");
   const uploadedDates = new Set(data.adsRawFiles.filter((file) => file.salesPlatformName === brand).map((file) => file.reportDate));
   const filesForSelection = data.adsRawFiles.filter(
     (file) => file.salesPlatformName === brand && file.reportDate === selectedDate && file.adAccountName === platformName
   );
+  const deleteAdsFile = async (fileId: string) => {
+    const confirmed = window.confirm("Delete this ads file and only its imported rows?");
+    if (!confirmed) return;
+    const next = await deleteRawFile(data, fileId);
+    setData(next);
+    await saveData(next);
+    setStatusMessage("تم حذف ملف الإعلانات والصفوف المرتبطة به فقط.");
+  };
 
   return (
     <div className="dashboard-stack">
@@ -311,11 +339,20 @@ function AdsFolderPage({ data, setData }: { data: AppData; setData: (data: AppDa
         {filesForSelection.length ? (
           <div className="notice success-note">
             <strong>Uploaded for {brand} / {selectedDate} / {platformName}</strong>
-            {filesForSelection.map((file) => <span key={file.id}>{file.fileName} - {new Date(file.uploadedAt).toLocaleString("ar-EG")}</span>)}
+            {filesForSelection.map((file) => (
+              <span key={file.id} className="file-row">
+                {file.fileName} - {new Date(file.uploadedAt).toLocaleString("ar-EG")}
+                <button className="ghost" onClick={() => deleteAdsFile(file.id)}>
+                  <Trash2 size={16} />
+                  Delete
+                </button>
+              </span>
+            ))}
           </div>
         ) : (
           <p className="status-line">لا توجد بيانات لهذه المنصة في اليوم المختار.</p>
         )}
+        {statusMessage && <p className="status-line">{statusMessage}</p>}
         <AdsUploadCard data={data} setData={setData} platform={adsPlatformKind(platformName)} fixedDate={selectedDate} brandName={brand} selectedAdsPlatform={platformName} />
       </section>
     </div>
@@ -387,12 +424,26 @@ function SalesUploadCard({
   const preview = async () => {
     if (!file) return;
     setMessage("جار قراءة الملف...");
+    if (!isWorkbookFile(file)) {
+      setPeoplePreview([]);
+      setPlatformPreview([]);
+      setErrors(["رفع الصور/screenshot يحتاج OCR موثوق أو إدخال يدوي. هذا المسار يحفظ Excel/CSV فقط حتى لا يتم تسجيل أرقام خاطئة."]);
+      setMessage("لم يتم إنشاء Preview لأن الملف ليس Excel أو CSV.");
+      return;
+    }
     const sourceFileId = createId();
-    const parsed = await parseSalesWorkbook(file, activeDate, sourceFileId);
-    setPeoplePreview(parsed.people);
-    setPlatformPreview(parsed.platforms);
-    setErrors(parsed.errors);
-    setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
+    try {
+      const parsed = await parseSalesWorkbook(file, activeDate, sourceFileId);
+      setPeoplePreview(parsed.people);
+      setPlatformPreview(parsed.platforms);
+      setErrors(parsed.errors);
+      setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
+    } catch (error) {
+      setPeoplePreview([]);
+      setPlatformPreview([]);
+      setErrors([error instanceof Error ? error.message : String(error)]);
+      setMessage("فشل قراءة الملف. راجعي نوع الملف والأعمدة.");
+    }
   };
 
   const save = async () => {
@@ -429,11 +480,13 @@ function SalesUploadCard({
         </div>
       </div>
       <div className="upload-box">
-        <input accept=".xlsx,.xls,.csv" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-        <label>
-          Select Report Date
-          <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
-        </label>
+        <input accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+        {!fixedDate && (
+          <label>
+            Select Report Date
+            <input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} />
+          </label>
+        )}
         <div className="actions">
           <button className="primary" disabled={!file} onClick={preview}>Preview</button>
           {peoplePreview.length || platformPreview.length ? (
@@ -486,14 +539,6 @@ function AdsUploadCard({
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const activeDate = fixedDate || reportDate;
-  const existing = data.adsRawFiles.some(
-    (raw) =>
-      raw.reportDate === activeDate &&
-      raw.adsPlatform === platform &&
-      raw.salesPlatformName === brandName &&
-      (raw.adAccountName || "غير محدد") === selectedAdsPlatform
-  );
-
   const preview = async () => {
     if (!file) return;
     setMessage("جار قراءة ملف الإعلانات...");
@@ -532,10 +577,10 @@ function AdsUploadCard({
       leads: Number(row.resultsCount) || row.leads || row.purchases || 0,
       cpc: Number(row.costPerResult) || row.cpc || 0
     }));
-    const next = await saveAdsUpload(data, rawFile, normalizedRows, platform, existing ? "replace" : "merge");
+    const next = await saveAdsUpload(data, rawFile, normalizedRows, platform, "merge");
     setData(next);
     await saveData(next);
-    setMessage(existing ? `تم استبدال بيانات ${platform}.` : `تم حفظ بيانات ${platform}.`);
+    setMessage(`تم حفظ ملف ${selectedAdsPlatform} بدون حذف الملفات الأخرى لنفس اليوم.`);
     setIsSaving(false);
   };
 
@@ -561,7 +606,7 @@ function AdsUploadCard({
           {rows.length > 0 ? (
             <button className="success" disabled={isSaving || errors.length > 0} onClick={save}>
               <Save size={18} />
-              {existing ? "Replace Existing Platform Data" : "Save Platform Data"}
+              Save Platform Data
             </button>
           ) : null}
         </div>
@@ -779,6 +824,84 @@ function SalesReportsPage({ data, range, setRange, hideFilters = false }: { data
             </tr>
           );
         })}
+      </SimpleTable>
+    </div>
+  );
+}
+
+function PageReportPage({ data, range, setRange }: { data: AppData; range: DateRange; setRange: (range: DateRange) => void }) {
+  const platforms = aggregatePlatforms(filterPlatforms(data, range));
+  const adsRows = filterAds(data, range);
+  const adsByPlatform = aggregateAdsByPlatform(adsRows);
+  const salesTotal = platforms.reduce((sum, row) => sum + row.totalRevenue, 0);
+  const ordersTotal = platforms.reduce((sum, row) => sum + row.totalOrders, 0);
+  const trend = dailyTrend(filterPeople(data, range), adsRows);
+
+  return (
+    <div className="dashboard-stack">
+      <DateFilters range={range} mode="day" onRangeChange={setRange} onModeChange={(mode) => setRange(makePeriodRange(range.from, mode))} />
+      <section className="kpi-grid small">
+        <KpiCard label="Page Sales" value={money(salesTotal)} />
+        <KpiCard label="Page Orders" value={integer(ordersTotal)} />
+        <KpiCard label="Ads Spend" value={money(adsRows.reduce((sum, row) => sum + row.spend, 0))} />
+        <KpiCard label="Best Page" value={platforms[0]?.platformName || "لا يوجد"} />
+      </section>
+      <section className="content-grid">
+        <ChartPanel title="Page sales trend">
+          <ResponsiveContainer width="100%" height={280}>
+            <LineChart data={trend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2a3b" />
+              <XAxis dataKey="date" stroke="#94a3b8" />
+              <YAxis stroke="#94a3b8" />
+              <Tooltip contentStyle={chartTooltipStyle} />
+              <Line type="monotone" dataKey="revenue" stroke="#38bdf8" strokeWidth={3} />
+              <Line type="monotone" dataKey="orders" stroke="#34d399" strokeWidth={3} />
+            </LineChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+        <ChartPanel title="Ads spend by platform">
+          <ResponsiveContainer width="100%" height={280}>
+            <BarChart data={adsByPlatform}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1f2a3b" />
+              <XAxis dataKey="platform" stroke="#94a3b8" />
+              <YAxis stroke="#94a3b8" />
+              <Tooltip contentStyle={chartTooltipStyle} />
+              <Bar dataKey="spend" fill="#0ea5e9" radius={[8, 8, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        </ChartPanel>
+      </section>
+      <SimpleTable title="Page performance" headers={["Page", "Orders", "Revenue", "Order Share", "Revenue Share", "AOV", "Related Spend", "ROAS", "CPA"]}>
+        {platforms.map((row) => {
+          const relatedSpend = adsRows
+            .filter((ad) => ad.salesPlatformName === row.platformName || ad.adAccountName === row.platformName)
+            .reduce((sum, ad) => sum + ad.spend, 0);
+          return (
+            <tr key={row.id}>
+              <td>{row.platformName}</td>
+              <td>{integer(row.totalOrders)}</td>
+              <td>{money(row.totalRevenue)}</td>
+              <td>{percent(ordersTotal ? (row.totalOrders / ordersTotal) * 100 : 0)}</td>
+              <td>{percent(salesTotal ? (row.totalRevenue / salesTotal) * 100 : 0)}</td>
+              <td>{money(row.totalOrders ? row.totalRevenue / row.totalOrders : null)}</td>
+              <td>{money(relatedSpend)}</td>
+              <td>{ratio(relatedSpend ? row.totalRevenue / relatedSpend : null)}</td>
+              <td>{money(row.totalOrders && relatedSpend ? relatedSpend / row.totalOrders : null)}</td>
+            </tr>
+          );
+        })}
+      </SimpleTable>
+      <SimpleTable title="Ads platform comparison" headers={["Platform", "Spend", "Messages", "Comments", "Results", "Cost / Result"]}>
+        {adsByPlatform.map((row) => (
+          <tr key={row.platform}>
+            <td>{row.platform}</td>
+            <td>{money(row.spend)}</td>
+            <td>{integer(row.messages)}</td>
+            <td>{integer(row.comments)}</td>
+            <td>{integer(row.results)}</td>
+            <td>{money(row.results ? row.spend / row.results : null)}</td>
+          </tr>
+        ))}
       </SimpleTable>
     </div>
   );
@@ -1221,6 +1344,8 @@ const aggregateAdsByPlatform = (rows: AdsRow[]) => {
 };
 
 const adsPlatformKind = (platformName: string): AdsPlatform => (/tiktok/i.test(platformName) || /تيك/.test(platformName) ? "TikTok" : "Meta");
+
+const isWorkbookFile = (file: File) => /\.(xlsx|xls|csv)$/i.test(file.name);
 
 const monthDays = (dateText: string) => {
   const date = new Date(`${dateText}T00:00:00`);
