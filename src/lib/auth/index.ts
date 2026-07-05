@@ -48,13 +48,17 @@ export const getCurrentProfile = async (): Promise<Profile | null> => {
   if (error) throw error;
   if (data) return fromProfileRow(data);
 
+  // Two callers (initial mount + the SIGNED_IN auth event) can race here on
+  // first login - upsert with ignoreDuplicates instead of insert so the
+  // loser hits no-op instead of a unique-violation exception, then re-select.
   const displayName = sessionData.session?.user.email ?? "New user";
-  const { data: created, error: insertError } = await supabase
+  const { error: upsertError } = await supabase
     .from("profiles")
-    .insert({ id: userId, display_name: displayName, role: "viewer", active: true })
-    .select()
-    .single();
-  if (insertError) throw insertError;
+    .upsert({ id: userId, display_name: displayName, role: "viewer", active: true }, { onConflict: "id", ignoreDuplicates: true });
+  if (upsertError) throw upsertError;
+
+  const { data: created, error: refetchError } = await supabase.from("profiles").select("*").eq("id", userId).single();
+  if (refetchError) throw refetchError;
   return fromProfileRow(created);
 };
 

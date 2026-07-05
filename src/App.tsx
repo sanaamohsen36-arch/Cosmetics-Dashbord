@@ -43,6 +43,7 @@ export default function DashboardApp() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [profile, setProfile] = useState<Profile | null>(null);
   const [authChecked, setAuthChecked] = useState(!isAuthEnabled);
+  const [authError, setAuthError] = useState("");
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -58,22 +59,31 @@ export default function DashboardApp() {
 
   useEffect(() => {
     if (!isAuthEnabled) return;
-    void getCurrentProfile().then((current) => {
-      setProfile(current);
-      setAuthChecked(true);
-    });
+    const loadProfile = () =>
+      getCurrentProfile()
+        .then((current) => {
+          setProfile(current);
+          setAuthError("");
+        })
+        .catch((error) => setAuthError(error instanceof Error ? error.message : String(error)))
+        .finally(() => setAuthChecked(true));
+
+    void loadProfile();
+    // Single source of truth for post-login profile fetch - avoids racing
+    // with LoginForm's own onSignedIn callback, which used to fetch too and
+    // could hit a unique-violation on the profiles insert.
     return onAuthStateChange((userId) => {
       if (!userId) {
         setProfile(null);
         return;
       }
-      void getCurrentProfile().then(setProfile);
+      void loadProfile();
     });
   }, []);
 
   if (isAuthEnabled && !authChecked) return null;
   if (isAuthEnabled && !profile) {
-    return <LoginForm onSignedIn={() => void getCurrentProfile().then(setProfile)} />;
+    return <LoginForm errorMessage={authError} onSignedIn={() => undefined} />;
   }
 
   const commitData = async (next: AppData) => {
