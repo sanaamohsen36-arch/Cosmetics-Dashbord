@@ -1,6 +1,6 @@
 export type AdsPlatform = "Meta" | "TikTok";
 export type UploadMode = "replace" | "merge" | "cancel";
-export type PageKey = "dashboard" | "sales-upload" | "ads-upload" | "sales-report" | "page-report" | "settings";
+export type PageKey = "dashboard" | "sales-upload" | "ads-upload" | "sales-report" | "page-report" | "settings" | "users";
 export type SalesRowType = "normal" | "subtotal" | "grand_total";
 export type SalesGroupType = "social" | "follow_up" | "other";
 export type OcrFieldConfidence = Record<string, number>;
@@ -192,28 +192,36 @@ export interface DateRange {
 }
 
 // Section 13 (Roles & Permissions)
-export type Role = "owner" | "marketing_manager" | "media_buyer" | "sales_manager" | "data_entry" | "viewer";
+export type Role = "owner" | "admin" | "marketing_manager" | "media_buyer" | "sales_manager" | "data_entry" | "viewer";
 
 export interface Profile {
   id: string;
   displayName: string;
+  email: string;
   role: Role;
   active: boolean;
+  lastSignInAt?: string | null;
   createdAt: string;
 }
 
 export type Capability =
+  | "dashboard.view"
+  | "sales_upload.view"
   | "sales_upload.upload"
   | "sales_upload.replace"
   | "sales_upload.delete_current"
   | "sales_upload.purge_version"
+  | "ads_upload.view"
   | "ads_upload.upload"
   | "ads_upload.delete"
   | "ads_upload.purge_version"
   | "preview.edit"
   | "mapping_memory.edit"
+  | "settings.view"
   | "settings.manage_master_data"
   | "settings.manage_users"
+  | "users.view"
+  | "users.manage"
   | "reports.view"
   | "audit_log.view"
   | "file_versions.view"

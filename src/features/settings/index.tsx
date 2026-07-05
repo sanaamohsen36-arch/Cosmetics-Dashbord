@@ -6,17 +6,10 @@ import type { AppData, BackupRun, Profile, Role, SystemHealthStatus, AuditLogEnt
 import { createId } from "../../lib/supabase";
 import { Badge } from "../../lib/ui";
 import { isAuthEnabled, listProfiles, updateProfileRole } from "../../lib/auth";
-import { can, roleLabels } from "../../lib/permissions";
+import { allRoles, can, effectiveRole, roleLabels } from "../../lib/permissions";
 import { listAuditLog } from "../../lib/audit";
 import { listHealthStatus } from "../../lib/health";
 import { listBackupRuns } from "../../lib/backup";
-
-const allRoles: Role[] = ["owner", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
-
-// Local-fallback mode (no Supabase) has no auth at all, so every visitor
-// keeps full access - same convention as every other Supabase-only feature
-// in this codebase. Once Supabase Auth is configured, real roles apply.
-const effectiveRole = (profile: Profile | null): Role | null => (isAuthEnabled ? profile?.role ?? null : "owner");
 
 export function SettingsPage({
   data,
@@ -31,7 +24,7 @@ export function SettingsPage({
   const [salespersonName, setSalespersonName] = useState("");
   const [salespersonCode, setSalespersonCode] = useState("");
   const [brandName, setBrandName] = useState("");
-  const role = effectiveRole(profile);
+  const role = effectiveRole(profile, isAuthEnabled);
 
   const addPlatform = async () => {
     if (!platformName.trim()) return;

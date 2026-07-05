@@ -19,55 +19,55 @@ $$;
 -- Sales tables: write access for owner/sales_manager/data_entry.
 drop policy if exists "public_write_sales_raw_files" on public.sales_raw_files;
 create policy "role_write_sales_raw_files" on public.sales_raw_files for all
-  using (public.current_role() in ('owner','sales_manager','data_entry'))
-  with check (public.current_role() in ('owner','sales_manager','data_entry'));
+  using (public.current_role() in ('owner','admin','sales_manager','data_entry'))
+  with check (public.current_role() in ('owner','admin','sales_manager','data_entry'));
 
 drop policy if exists "public_write_sales_by_salesperson" on public.sales_by_salesperson;
 create policy "role_write_sales_by_salesperson" on public.sales_by_salesperson for all
-  using (public.current_role() in ('owner','sales_manager','data_entry'))
-  with check (public.current_role() in ('owner','sales_manager','data_entry'));
+  using (public.current_role() in ('owner','admin','sales_manager','data_entry'))
+  with check (public.current_role() in ('owner','admin','sales_manager','data_entry'));
 
 drop policy if exists "public_write_sales_by_platform" on public.sales_by_platform;
 create policy "role_write_sales_by_platform" on public.sales_by_platform for all
-  using (public.current_role() in ('owner','sales_manager','data_entry'))
-  with check (public.current_role() in ('owner','sales_manager','data_entry'));
+  using (public.current_role() in ('owner','admin','sales_manager','data_entry'))
+  with check (public.current_role() in ('owner','admin','sales_manager','data_entry'));
 
 -- Ads tables: write access for owner/marketing_manager/media_buyer.
 drop policy if exists "public_write_ads_raw_files" on public.ads_raw_files;
 create policy "role_write_ads_raw_files" on public.ads_raw_files for all
-  using (public.current_role() in ('owner','marketing_manager','media_buyer'))
-  with check (public.current_role() in ('owner','marketing_manager','media_buyer'));
+  using (public.current_role() in ('owner','admin','marketing_manager','media_buyer'))
+  with check (public.current_role() in ('owner','admin','marketing_manager','media_buyer'));
 
 drop policy if exists "public_write_meta_ads" on public.meta_ads;
 create policy "role_write_meta_ads" on public.meta_ads for all
-  using (public.current_role() in ('owner','marketing_manager','media_buyer'))
-  with check (public.current_role() in ('owner','marketing_manager','media_buyer'));
+  using (public.current_role() in ('owner','admin','marketing_manager','media_buyer'))
+  with check (public.current_role() in ('owner','admin','marketing_manager','media_buyer'));
 
 drop policy if exists "public_write_tiktok_ads" on public.tiktok_ads;
 create policy "role_write_tiktok_ads" on public.tiktok_ads for all
-  using (public.current_role() in ('owner','marketing_manager','media_buyer'))
-  with check (public.current_role() in ('owner','marketing_manager','media_buyer'));
+  using (public.current_role() in ('owner','admin','marketing_manager','media_buyer'))
+  with check (public.current_role() in ('owner','admin','marketing_manager','media_buyer'));
 
 -- Master/settings data: owner/marketing_manager/sales_manager only.
 drop policy if exists "public_write_platform_settings" on public.platform_settings;
 create policy "role_write_platform_settings" on public.platform_settings for all
-  using (public.current_role() in ('owner','marketing_manager','sales_manager'))
-  with check (public.current_role() in ('owner','marketing_manager','sales_manager'));
+  using (public.current_role() in ('owner','admin','marketing_manager','sales_manager'))
+  with check (public.current_role() in ('owner','admin','marketing_manager','sales_manager'));
 
 drop policy if exists "public_write_salespeople" on public.salespeople;
 create policy "role_write_salespeople" on public.salespeople for all
-  using (public.current_role() in ('owner','marketing_manager','sales_manager'))
-  with check (public.current_role() in ('owner','marketing_manager','sales_manager'));
+  using (public.current_role() in ('owner','admin','marketing_manager','sales_manager'))
+  with check (public.current_role() in ('owner','admin','marketing_manager','sales_manager'));
 
 drop policy if exists "public_write_platforms" on public.platforms;
 create policy "role_write_platforms" on public.platforms for all
-  using (public.current_role() in ('owner','marketing_manager','sales_manager'))
-  with check (public.current_role() in ('owner','marketing_manager','sales_manager'));
+  using (public.current_role() in ('owner','admin','marketing_manager','sales_manager'))
+  with check (public.current_role() in ('owner','admin','marketing_manager','sales_manager'));
 
 drop policy if exists "public_write_brands" on public.brands;
 create policy "role_write_brands" on public.brands for all
-  using (public.current_role() in ('owner','marketing_manager','sales_manager'))
-  with check (public.current_role() in ('owner','marketing_manager','sales_manager'));
+  using (public.current_role() in ('owner','admin','marketing_manager','sales_manager'))
+  with check (public.current_role() in ('owner','admin','marketing_manager','sales_manager'));
 
 -- Profiles: anyone reads (role display), only Owner assigns/changes roles.
 drop policy if exists "public_write_profiles" on public.profiles;

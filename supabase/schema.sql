@@ -214,8 +214,9 @@ create index if not exists idx_ocr_salesperson_corrections_wrong_code on public.
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null,
+  email text not null default '',
   role text not null default 'viewer' check (
-    role in ('owner','marketing_manager','media_buyer','sales_manager','data_entry','viewer')
+    role in ('owner','admin','marketing_manager','media_buyer','sales_manager','data_entry','viewer')
   ),
   active boolean not null default true,
   created_at timestamptz not null default now()

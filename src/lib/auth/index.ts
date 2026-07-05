@@ -29,6 +29,7 @@ export const onAuthStateChange = (callback: (userId: string | null) => void) => 
 const fromProfileRow = (row: any): Profile => ({
   id: row.id,
   displayName: row.display_name || "",
+  email: row.email || "",
   role: row.role as Role,
   active: Boolean(row.active),
   createdAt: row.created_at
@@ -36,8 +37,8 @@ const fromProfileRow = (row: any): Profile => ({
 
 // Fetches the current session's profile, creating a default one (role:
 // viewer) on first login if none exists yet. An Owner promotes new users
-// via Settings (settings.manage_users) - nothing here can self-grant a
-// higher role.
+// via the Users page (users.manage) - nothing here can self-grant a higher
+// role.
 export const getCurrentProfile = async (): Promise<Profile | null> => {
   if (!supabase) return null;
   const { data: sessionData } = await supabase.auth.getSession();
@@ -51,10 +52,11 @@ export const getCurrentProfile = async (): Promise<Profile | null> => {
   // Two callers (initial mount + the SIGNED_IN auth event) can race here on
   // first login - upsert with ignoreDuplicates instead of insert so the
   // loser hits no-op instead of a unique-violation exception, then re-select.
-  const displayName = sessionData.session?.user.email ?? "New user";
+  const email = sessionData.session?.user.email ?? "";
+  const displayName = email || "New user";
   const { error: upsertError } = await supabase
     .from("profiles")
-    .upsert({ id: userId, display_name: displayName, role: "viewer", active: true }, { onConflict: "id", ignoreDuplicates: true });
+    .upsert({ id: userId, display_name: displayName, email, role: "viewer", active: true }, { onConflict: "id", ignoreDuplicates: true });
   if (upsertError) throw upsertError;
 
   const { data: created, error: refetchError } = await supabase.from("profiles").select("*").eq("id", userId).single();

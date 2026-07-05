@@ -1173,6 +1173,7 @@ export const supersedeAdsRawFile = async (existingFileId: string, newFileId: str
 const fromProfileRow = (row: any): Profile => ({
   id: row.id,
   displayName: row.display_name || "",
+  email: row.email || "",
   role: row.role,
   active: Boolean(row.active),
   createdAt: row.created_at
