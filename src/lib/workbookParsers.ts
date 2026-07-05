@@ -571,6 +571,178 @@ export const applyManualColumnMapping = (
   };
 };
 
+// --- Fixed official template: Salespeople_Input + Pages_Input sheets ---
+//
+// The primary upload format: two separate sheets, each already long-format
+// (one row per entity per day, Morning/Evening/Total already split into
+// their own named columns). Salespeople and Pages are independent - a
+// salesperson row never carries a platform/page, and Pages_Input is the
+// only source of platform/page names. Matched by exact sheet name and exact
+// (not fuzzy) column-header equality, since this is a fixed contract, not a
+// format to guess at; any new salesperson/platform/page name is accepted
+// and flows through the normal syncMasterData additive-save path untouched.
+const FIXED_PEOPLE_SHEET = "salespeople_input";
+const FIXED_PAGES_SHEET = "pages_input";
+
+const findSheetByExactName = (workbook: XLSX.WorkBook, name: string) =>
+  workbook.SheetNames.find((sheetName) => sheetName.trim().toLowerCase() === name);
+
+const buildExactHeaderMap = (headers: unknown[]): HeaderMap => {
+  const map: HeaderMap = {};
+  headers.forEach((cell, index) => {
+    const key = normalizeArabicText(cell).replace(/\s+/g, " ").trim();
+    if (key) map[key] = index;
+  });
+  return map;
+};
+
+const readFixedTemplateRow = (
+  row: unknown[],
+  columns: { date: number; morningOrders: number; morningRevenue: number; eveningOrders: number; eveningRevenue: number; totalOrders: number; totalRevenue: number },
+  fallbackDate: string
+) => {
+  const reportDate = normalizeExcelDate(columns.date >= 0 ? row[columns.date] : null) || fallbackDate;
+  const morningOrders = readWideAmount(row, columns.morningOrders);
+  const morningRevenue = readWideAmount(row, columns.morningRevenue);
+  const eveningOrders = readWideAmount(row, columns.eveningOrders);
+  const eveningRevenue = readWideAmount(row, columns.eveningRevenue);
+  const totalOrders = columns.totalOrders >= 0 && hasValue(row[columns.totalOrders])
+    ? readWideAmount(row, columns.totalOrders)
+    : morningOrders + eveningOrders;
+  const totalRevenue = columns.totalRevenue >= 0 && hasValue(row[columns.totalRevenue])
+    ? readWideAmount(row, columns.totalRevenue)
+    : morningRevenue + eveningRevenue;
+  return { reportDate, morningOrders, morningRevenue, eveningOrders, eveningRevenue, totalOrders, totalRevenue };
+};
+
+const parseFixedPeopleSheet = (
+  rows: unknown[][],
+  fallbackDate: string,
+  sourceFileId: string,
+  now: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  errors: string[]
+) => {
+  const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
+  if (headerRowIndex < 0) return;
+  const map = buildExactHeaderMap(rows[headerRowIndex]);
+  const columns = {
+    date: map["date"] ?? -1,
+    code: map["salesperson code"] ?? -1,
+    name: map["salesperson"] ?? -1,
+    morningOrders: map["morning orders"] ?? -1,
+    morningRevenue: map["morning revenue"] ?? -1,
+    eveningOrders: map["evening orders"] ?? -1,
+    eveningRevenue: map["evening revenue"] ?? -1,
+    totalOrders: map["total orders"] ?? -1,
+    totalRevenue: map["total revenue"] ?? -1
+  };
+  if (columns.name < 0) return;
+
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (isEmptyRow(row)) continue;
+    const excelRow = rowIndex + 1;
+    try {
+      const name = String(row[columns.name] ?? "").trim();
+      if (!name) continue;
+      const code = columns.code >= 0 ? String(row[columns.code] ?? "").trim() : "";
+      const amounts = readFixedTemplateRow(row, columns, fallbackDate);
+      const key = code || normalizeText(name);
+      const existing =
+        peopleMap.get(key) ??
+        {
+          id: createId(),
+          reportDate: amounts.reportDate,
+          brandName: "",
+          salespersonName: name,
+          salespersonCode: code,
+          morningOrders: 0,
+          morningRevenue: 0,
+          eveningOrders: 0,
+          eveningRevenue: 0,
+          totalOrders: 0,
+          totalRevenue: 0,
+          sourceFileId,
+          createdAt: now
+        };
+      existing.morningOrders += amounts.morningOrders;
+      existing.morningRevenue += amounts.morningRevenue;
+      existing.eveningOrders += amounts.eveningOrders;
+      existing.eveningRevenue += amounts.eveningRevenue;
+      existing.totalOrders += amounts.totalOrders;
+      existing.totalRevenue += amounts.totalRevenue;
+      peopleMap.set(key, existing);
+    } catch (error) {
+      errors.push(`Salespeople_Input صف ${excelRow}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+};
+
+const parseFixedPagesSheet = (
+  rows: unknown[][],
+  fallbackDate: string,
+  sourceFileId: string,
+  now: string,
+  platformMap: Map<string, SalesByPlatform>,
+  errors: string[]
+) => {
+  const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
+  if (headerRowIndex < 0) return;
+  const map = buildExactHeaderMap(rows[headerRowIndex]);
+  const columns = {
+    date: map["date"] ?? -1,
+    page: map["platform"] ?? -1,
+    morningOrders: map["morning orders"] ?? -1,
+    morningRevenue: map["morning revenue"] ?? -1,
+    eveningOrders: map["evening orders"] ?? -1,
+    eveningRevenue: map["evening revenue"] ?? -1,
+    totalOrders: map["total orders"] ?? -1,
+    totalRevenue: map["total revenue"] ?? -1
+  };
+  if (columns.page < 0) return;
+
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (isEmptyRow(row)) continue;
+    const excelRow = rowIndex + 1;
+    try {
+      const name = String(row[columns.page] ?? "").trim();
+      if (!name) continue;
+      const amounts = readFixedTemplateRow(row, columns, fallbackDate);
+      const key = normalizeText(name);
+      const existing =
+        platformMap.get(key) ??
+        {
+          id: createId(),
+          reportDate: amounts.reportDate,
+          brandName: "",
+          platformCategory: "",
+          groupType: classifySalesGroup(name, ""),
+          rowType: classifySalesRowType(name),
+          platformName: name,
+          morningOrders: 0,
+          morningRevenue: 0,
+          eveningOrders: 0,
+          eveningRevenue: 0,
+          totalOrders: 0,
+          totalRevenue: 0,
+          sourceFileId,
+          createdAt: now
+        };
+      existing.morningOrders += amounts.morningOrders;
+      existing.morningRevenue += amounts.morningRevenue;
+      existing.eveningOrders += amounts.eveningOrders;
+      existing.eveningRevenue += amounts.eveningRevenue;
+      existing.totalOrders += amounts.totalOrders;
+      existing.totalRevenue += amounts.totalRevenue;
+      platformMap.set(key, existing);
+    } catch (error) {
+      errors.push(`Pages_Input صف ${excelRow}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+};
+
 export const parseSalesWorkbook = async (
   file: File,
   fallbackDate: string,
@@ -584,6 +756,26 @@ export const parseSalesWorkbook = async (
   const errors: string[] = [];
   const debug: WorkbookDebug[] = [];
   const pendingMappings: PendingColumnMapping[] = [];
+
+  const peopleSheetName = findSheetByExactName(workbook, FIXED_PEOPLE_SHEET);
+  const pagesSheetName = findSheetByExactName(workbook, FIXED_PAGES_SHEET);
+
+  if (peopleSheetName || pagesSheetName) {
+    if (peopleSheetName) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[peopleSheetName], { header: 1, defval: null, raw: false });
+      parseFixedPeopleSheet(rows, fallbackDate, sourceFileId, now, peopleMap, errors);
+    }
+    if (pagesSheetName) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[pagesSheetName], { header: 1, defval: null, raw: false });
+      parseFixedPagesSheet(rows, fallbackDate, sourceFileId, now, platformMap, errors);
+    }
+    return {
+      people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+      platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+      errors,
+      debug
+    };
+  }
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
