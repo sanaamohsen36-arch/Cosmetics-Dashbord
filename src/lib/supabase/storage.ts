@@ -18,6 +18,28 @@ import type {
 import type { AppNotification, AuditLogEntry, BackupRun, Profile, SystemHealthStatus } from "../../types";
 import { isSubtotalPlatformName } from "../metrics";
 import { isSupabaseConfigured, supabase } from "./client";
+import { getCurrentProfile } from "../auth";
+import { logAction } from "../audit";
+import { reportHealth } from "../health";
+
+// Best-effort audit/health wiring shared by every write path below. Never
+// throws - a logging failure must not block the save/delete it describes.
+// No-ops in local-fallback mode (getCurrentProfile returns null with no
+// Supabase session) same as every other Supabase-only feature here.
+const recordWrite = async (
+  action: string,
+  entityType: string,
+  component: string,
+  options?: { entityId?: string; previousValue?: unknown; newValue?: unknown }
+) => {
+  try {
+    const profile = await getCurrentProfile();
+    await logAction(profile?.id ?? null, profile?.role ?? null, action, entityType, options);
+    await reportHealth(component, "ok");
+  } catch (error) {
+    await reportHealth(component, "down", error instanceof Error ? error.message : String(error)).catch(() => undefined);
+  }
+};
 
 const STORAGE_KEY = "daily-report-dashboard-v1";
 
@@ -575,6 +597,11 @@ export const saveSalesUpload = async (
   await insertRows("sales_raw_files", [toSalesRawFileRow(versionedFile)]);
   await insertRows("sales_by_salesperson", people.map(toSalespersonRow));
   await insertRows("sales_by_platform", platforms.map(toPlatformSalesRow));
+  await recordWrite(mode, "sales_raw_file", "sales_upload", {
+    entityId: versionedFile.id,
+    previousValue: previousFile?.id,
+    newValue: { fileName: versionedFile.fileName, reportDate: versionedFile.reportDate, version: versionedFile.version }
+  });
   return next;
 };
 
@@ -641,6 +668,11 @@ export const saveAdsUpload = async (
     await insertRows("tiktok_ads", rows.map(toTikTokAdsRow));
   }
 
+  await recordWrite(mode, "ads_raw_file", "ads_upload", {
+    entityId: versionedFile.id,
+    previousValue: previousFile?.id,
+    newValue: { fileName: versionedFile.fileName, reportDate: versionedFile.reportDate, version: versionedFile.version }
+  });
   return next;
 };
 
@@ -658,6 +690,7 @@ export const deleteDataForDate = async (current: AppData, reportDate: string): P
   await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", reportDate));
   await deleteWhere("sales_raw_files", (query) => query.eq("report_date", reportDate));
   await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  await recordWrite("delete", "day", "sales_upload", { newValue: { reportDate } });
   return next;
 };
 
@@ -676,6 +709,7 @@ export const deleteSalesForDate = async (current: AppData, reportDate: string): 
   await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", reportDate));
   await deleteWhere("sales_raw_files", (query) => query.eq("report_date", reportDate));
   await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  await recordWrite("delete", "sales_raw_file", "sales_upload", { newValue: { reportDate } });
   return next;
 };
 
@@ -693,6 +727,7 @@ export const deleteAdsForDate = async (current: AppData, reportDate: string, pla
   await deleteWhere("ads_raw_files", (query) => query.eq("report_date", reportDate).eq("ads_platform", platform));
   await deleteWhere(platform === "Meta" ? "meta_ads" : "tiktok_ads", (query) => query.eq("report_date", reportDate));
   await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  await recordWrite("delete", "ads_raw_file", "ads_upload", { newValue: { reportDate, platform } });
   return next;
 };
 
@@ -723,6 +758,12 @@ export const deleteRawFile = async (current: AppData, rawFileId: string): Promis
     await deleteWhere(adsFile.adsPlatform === "Meta" ? "meta_ads" : "tiktok_ads", (query) => query.eq("source_file_id", rawFileId));
     await deleteWhere("daily_summary", (query) => query.eq("report_date", adsFile.reportDate));
   }
+  const entityType = salesFile ? "sales_raw_file" : "ads_raw_file";
+  const component = salesFile ? "sales_upload" : "ads_upload";
+  await recordWrite("delete", entityType, component, {
+    entityId: rawFileId,
+    newValue: { fileName: (salesFile ?? adsFile)?.fileName }
+  });
   return next;
 };
 
