@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { FileSpreadsheet, FolderOpen, Save, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { FileSpreadsheet, FolderOpen, RotateCcw, Save, Trash2 } from "lucide-react";
 import type { AppData, SalesByPlatform, SalesBySalesperson, SalesRawFile } from "../../types";
 import { firstDayOfMonth, monthKey, today } from "../../lib/date";
 import { integer, money } from "../../lib/format";
@@ -95,6 +95,7 @@ function SalesUploadCard({
   compact?: boolean;
 }) {
   const [file, setFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [reportDate, setReportDate] = useState(fixedDate || today);
   const [peoplePreview, setPeoplePreview] = useState<SalesBySalesperson[]>([]);
   const [platformPreview, setPlatformPreview] = useState<SalesByPlatform[]>([]);
@@ -109,6 +110,18 @@ function SalesUploadCard({
   const activeDate = fixedDate || reportDate;
   const existing = data.salesBySalesperson.some((row) => row.reportDate === activeDate) || data.salesByPlatform.some((row) => row.reportDate === activeDate);
   const totals = salesPreviewTotals(peoplePreview, platformPreview);
+  const hasValidPreview = (peoplePreview.length > 0 || platformPreview.length > 0) && errors.length === 0;
+
+  const reset = () => {
+    setFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    setPeoplePreview([]);
+    setPlatformPreview([]);
+    setOriginalPeoplePreview([]);
+    setOriginalPlatformPreview([]);
+    setErrors([]);
+    setMessage("");
+  };
 
   const preview = async () => {
     if (!file) return;
@@ -188,7 +201,12 @@ function SalesUploadCard({
         </div>
       </div>
       <div className="upload-box">
-        <input accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+        <input
+          ref={fileInputRef}
+          accept=".xlsx,.xls,.csv,.png,.jpg,.jpeg"
+          type="file"
+          onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+        />
         {!fixedDate && (
           <label>
             Select Report Date
@@ -197,12 +215,18 @@ function SalesUploadCard({
         )}
         <div className="actions">
           <button className="primary" disabled={!file} onClick={preview}>Preview</button>
-          {peoplePreview.length || platformPreview.length ? (
-            <button className="success" disabled={isSaving || errors.length > 0} onClick={save}>
+          {hasValidPreview && (
+            <button className="success" disabled={isSaving} onClick={save}>
               <Save size={18} />
               {existing ? "Replace File" : "Save Data"}
             </button>
-          ) : null}
+          )}
+          {(file || peoplePreview.length > 0 || platformPreview.length > 0 || errors.length > 0) && (
+            <button className="ghost" disabled={isSaving} onClick={reset}>
+              <RotateCcw size={16} />
+              Cancel / Reset
+            </button>
+          )}
         </div>
         {message && <p className="status-line">{message}</p>}
       </div>
@@ -211,6 +235,9 @@ function SalesUploadCard({
         <div className="preview-stack">
           <div className={totals.peopleOrders === totals.platformOrders && totals.peopleRevenue === totals.platformRevenue ? "notice success-note" : "notice warning-note"}>
             <strong>إجماليات المعاينة</strong>
+            <span>إجمالي الأوردرات: {integer(totals.peopleOrders)} / إجمالي القيمة: {money(totals.peopleRevenue)}</span>
+            <span>صباحي: {integer(totals.morningOrders)} أوردر / {money(totals.morningRevenue)}</span>
+            <span>مسائي: {integer(totals.eveningOrders)} أوردر / {money(totals.eveningRevenue)}</span>
             <span>السيلز: {integer(totals.peopleOrders)} أوردر / {money(totals.peopleRevenue)}</span>
             <span>الصفحات: {integer(totals.platformOrders)} أوردر / {money(totals.platformRevenue)}</span>
             {totals.grandOrders !== null || totals.grandRevenue !== null ? <span>إجمالي اليوم في الملف: {integer(totals.grandOrders)} أوردر / {money(totals.grandRevenue)}</span> : null}
@@ -294,6 +321,10 @@ function EditableRow<T extends SalesBySalesperson | SalesByPlatform>({
 const salesPreviewTotals = (people: SalesBySalesperson[], platforms: SalesByPlatform[]) => ({
   peopleOrders: people.reduce((sum, row) => sum + row.totalOrders, 0),
   peopleRevenue: people.reduce((sum, row) => sum + row.totalRevenue, 0),
+  morningOrders: people.reduce((sum, row) => sum + row.morningOrders, 0),
+  morningRevenue: people.reduce((sum, row) => sum + row.morningRevenue, 0),
+  eveningOrders: people.reduce((sum, row) => sum + row.eveningOrders, 0),
+  eveningRevenue: people.reduce((sum, row) => sum + row.eveningRevenue, 0),
   platformOrders: normalSalesPlatforms(platforms).reduce((sum, row) => sum + row.totalOrders, 0),
   platformRevenue: normalSalesPlatforms(platforms).reduce((sum, row) => sum + row.totalRevenue, 0),
   grandOrders: platforms.find((row) => row.rowType === "grand_total")?.totalOrders ?? null,

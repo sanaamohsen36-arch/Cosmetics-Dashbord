@@ -82,6 +82,19 @@ const processGridIntoMaps = (
   const pageColumns = detectPageColumns(normalizedHeaders, peopleColumns?.endIndex ?? -1);
   const sheetType = detectSheetType(gridLabel, normalizedHeaders);
 
+  // Neither table was recognized in this sheet - without this check, the
+  // parser silently returns empty people/platforms with zero errors, and the
+  // upload UI shows a false "Preview ready" with no rows and no way to save.
+  if (!peopleColumns && !pageColumns) {
+    const foundHeaders = headers.filter((value) => value && !isUnnamed(value)).join("، ");
+    errors.push(
+      `لم يتم التعرف على أعمدة السيلز أو الصفحات في "${gridLabel}". ` +
+        `الأعمدة الموجودة: ${foundHeaders || "لا يوجد"}. ` +
+        `تأكدي من وجود أعمدة مثل "اسم السيلز"/"الشيفت"/"عدد الاوردرات"/"قيمة الاوردرات" أو "الصفحة".`
+    );
+    return;
+  }
+
   for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
     const excelRow = rowIndex + 1;
