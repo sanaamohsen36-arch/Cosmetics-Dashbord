@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { listHealthStatus } from "../../../lib/health";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 // GET /api/health - aggregates every monitored component's current status
 // in one response. Usable by an in-app Settings panel and by an external

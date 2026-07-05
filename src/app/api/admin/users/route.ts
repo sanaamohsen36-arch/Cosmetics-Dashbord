@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { ApiError, getServiceClient, handleApiError, requireOwner } from "../../../../lib/supabase/admin";
 
 export const runtime = "nodejs";
+// Never let Next's Full Route Cache or a CDN serve a stale response for
+// this - every call must re-check the caller's live session/role and the
+// server's current env, not a cached result from an earlier deployment.
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const VALID_ROLES = ["owner", "admin", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
 
