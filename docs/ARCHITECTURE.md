@@ -121,29 +121,31 @@ Done, on branch `claude/fix-dashboard-system`:
     produces a correct preview, mapping persisted), and the same
     unrecognized file uploaded a second time (auto-recognized via the
     learned mapping, wizard not shown).
+16. Implemented sections 13-18: `lib/permissions`, `lib/auth` (login form +
+    sign-out, no-ops without Supabase), `lib/audit` (append-only, RLS grants
+    insert+select only), `lib/health`, `lib/notifications` (+ topbar bell),
+    `lib/backup` (+ `/api/backup/run`, `/api/backup/restore`), file
+    versioning (`is_current`/`version`/`superseded_*` on sales and ads raw
+    files, replace supersedes instead of deleting). Settings' Roles
+    placeholder replaced with live user/role management, plus new Audit Log,
+    Backup, and Health panels. Role-based RLS shipped as an opt-in
+    `supabase/rls-role-based.sql`, applied manually once an auth UI gate is
+    actually enforced (today's open `using (true)` policies stay active
+    until then). Section 19 decision: **one upload = one brand, never a
+    mix** - added a `brands` master table and `brand_name` on
+    `sales_raw_files`/`sales_by_salesperson`/`sales_by_platform`, with the
+    versioning slot now `(report_date, brand_name)` for Sales, matching
+    Ads' existing `(report_date, ads_platform, brand, account)` slot. Sales
+    Upload gained a Brand dropdown mirroring Ads Upload's.
 
 Planned, not yet implemented (this document describes the target so all of
 this can proceed without re-litigating structure):
 
 - Migration from the current flat Supabase schema to the normalized
   brand/file/data schema described below.
-- Multi-brand support beyond Ads (Sales currently has no brand dimension).
-- **User roles & permissions** (section 13), **audit log** (section 14), and
-  **file versioning** (section 15) — approved direction as of this revision,
-  no code written yet. These three are interdependent: audit log entries
-  need a real "user," which needs auth/roles to exist first; file-version
-  restore/purge actions need a capability to gate them.
-- **Backup & Restore strategy** (section 16) — approved direction as of this
-  revision, no code written yet. Depends on file versioning (section 15,
-  backups must capture superseded versions too) and surfaces a real
-  prerequisite gap: uploaded files are not actually stored as blobs
-  anywhere today (see section 16), so "recoverable file uploads" needs that
-  fixed first.
-- **System Health Monitoring** (section 17) and **Notification Center**
-  (section 18) — approved direction as of this revision, no code written
-  yet. Both are cross-cutting: they hook into OCR (section 5), Backup
-  (section 16), and future cron/migration work, and both depend on the
-  `system_health.view`/`notifications.view` capabilities (section 13).
+- Dashboard/Sales Report/Page Report do not yet filter by brand - multi-brand
+  sales data aggregates combined across brands until a brand filter is added
+  to those report screens.
 
 ---
 
@@ -248,12 +250,10 @@ Planned migration path:
    `ads_data`; keep `ocr_page_corrections`/`ocr_salesperson_corrections`/
    `salespeople`/`platforms` as-is — they're shared master/mapping tables,
    not part of either schema specifically).
-2. Add a `brand_id` to `sales_files` (today only `ads_files`/`ads_data` are
-   brand-scoped — Sales Upload currently has no brand dimension at all). This
-   needs a product decision on whether one company's daily sales report can
-   ever span multiple brands in one file, or whether brand is always
-   Sales-Upload's first selector too, mirroring Ads Upload. **Open question,
-   to confirm before multi-brand work starts** (section 19).
+2. Add a `brand_id` to `sales_files` (mirrors `brand_name` already added to
+   the flat `sales_raw_files` in this revision). **Resolved** (section 19):
+   one upload = one brand, never a mix - a sales report never spans multiple
+   brands in one file.
 3. Add the tables and columns introduced by this revision:
    - `profiles` (section 13) — one row per authenticated user, holding role.
    - `audit_log` (section 14) — append-only action log.
@@ -1115,10 +1115,10 @@ structure accommodates them without rework when their time comes.
   would live in `features/ads-upload/` as an alternate data-entry path, not
   a separate module. API-synced rows still go through the same versioning
   (section 15) and audit logging (section 14) as manual uploads.
-- **Multi-brand support**: partially modeled already (`brands` table, Ads
-  Upload already brand-scoped). Extending it to Sales Upload requires the
-  open schema question in section 3 (does one sales report ever span
-  multiple brands?) to be answered first.
+- **Multi-brand support**: done (item 16, history section) - `brands` table,
+  `brand_name` on both Sales and Ads uploads, one upload = one brand.
+  Remaining gap: Dashboard/Sales Report/Page Report don't filter by brand
+  yet, they show sales data combined across brands.
 
 ---
 
