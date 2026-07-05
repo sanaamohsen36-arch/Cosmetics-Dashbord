@@ -145,6 +145,7 @@ export interface PlatformMaster {
 // automatic alias-based detection can't recognize a workbook's headers.
 export type MappableField =
   | "salespersonName"
+  | "salespersonCode"
   | "pageName"
   | "platform"
   | "orders"

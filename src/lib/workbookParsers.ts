@@ -156,7 +156,17 @@ const readManualMappedRow = (
   const getNum = (field: MappableField) => {
     const index = mapping[field];
     if (index === undefined || !hasValue(row[index])) return 0;
-    return toNumber(row[index]);
+    // Lenient by design: a manually-mapped grid (OCR output especially) can
+    // contain a stray non-numeric cell - e.g. a second table's own header
+    // row transcribed as if it were data, when two tables share one column
+    // layout. Treat it as 0 instead of rejecting the whole row; the
+    // editable preview is exactly where the user reviews/corrects it,
+    // rather than the row silently vanishing or the whole upload failing.
+    try {
+      return toNumber(row[index]);
+    } catch {
+      return 0;
+    }
   };
   // If the file splits morning/evening into their own columns, use those
   // directly; otherwise treat a single Orders/Revenue pair as one unsplit
@@ -167,14 +177,25 @@ const readManualMappedRow = (
   const eveningRevenue = mapping.eveningRevenue !== undefined ? getNum("eveningRevenue") : 0;
 
   const name = getText("salespersonName");
-  if (name) {
+  const code = getText("salespersonCode");
+  // Some real reports transcribe into a single grid that stacks a
+  // salespeople table and a totals/pages table sharing the same "name"
+  // column position. When a code column is configured, a name without a
+  // code is not a real salesperson row - it's a subtotal/grand-total/page
+  // row - so treat it as page data instead rather than miscounting it as
+  // a salesperson.
+  const codeConfigured = mapping.salespersonCode !== undefined;
+  const isPerson = Boolean(name) && (!codeConfigured || Boolean(code));
+
+  if (isPerson) {
+    const key = code || name;
     const existing =
-      peopleMap.get(name) ??
+      peopleMap.get(key) ??
       {
         id: createId(),
         reportDate: fallbackDate,
         salespersonName: name,
-        salespersonCode: "",
+        salespersonCode: code,
         morningOrders: 0,
         morningRevenue: 0,
         eveningOrders: 0,
@@ -190,10 +211,10 @@ const readManualMappedRow = (
     existing.eveningRevenue += eveningRevenue;
     existing.totalOrders = existing.morningOrders + existing.eveningOrders;
     existing.totalRevenue = existing.morningRevenue + existing.eveningRevenue;
-    peopleMap.set(name, existing);
+    peopleMap.set(key, existing);
   }
 
-  const pageName = getText("pageName");
+  const pageName = mapping.pageName !== undefined ? getText("pageName") : !isPerson ? name : "";
   if (pageName) {
     const category = getText("platform");
     const existing =
@@ -306,6 +327,20 @@ export const parseSalesGrid = (
   sourceFileId: string,
   gridLabel = "ocr",
   savedMappings: ColumnMapping[] = []
+): ParsedSalesWorkbook => parseSalesGrids([{ label: gridLabel, rows }], fallbackDate, sourceFileId, savedMappings);
+
+// Multi-grid entry point: each grid is processed independently (own header
+// row, own column detection/mapping), then merged - the same pattern
+// parseSalesWorkbook already uses across multiple Excel sheets. Needed
+// because OCR can return more than one visually distinct table per image
+// (e.g. a salespeople table and a separate pages/platforms table), and
+// those tables commonly have different column layouts - flattening them
+// into one grid under one header row causes column misalignment.
+export const parseSalesGrids = (
+  grids: Array<{ label: string; rows: unknown[][] }>,
+  fallbackDate: string,
+  sourceFileId: string,
+  savedMappings: ColumnMapping[] = []
 ): ParsedSalesWorkbook => {
   const now = new Date().toISOString();
   const peopleMap = new Map<string, SalesBySalesperson>();
@@ -314,7 +349,9 @@ export const parseSalesGrid = (
   const debug: WorkbookDebug[] = [];
   const pendingMappings: PendingColumnMapping[] = [];
 
-  processGridIntoMaps(rows, gridLabel, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug, savedMappings, pendingMappings);
+  for (const grid of grids) {
+    processGridIntoMaps(grid.rows, grid.label, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug, savedMappings, pendingMappings);
+  }
 
   return {
     people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
@@ -335,7 +372,8 @@ export const parseSalesImage = async (
   if (extraction.warnings.length) {
     console.warn("Sales OCR warnings", extraction.providerId, extraction.warnings);
   }
-  return parseSalesGrid(extraction.rows, fallbackDate, sourceFileId, `ocr:${extraction.providerId}`, savedMappings);
+  const grids = extraction.tables.map((rows, index) => ({ label: `ocr:${extraction.providerId}:${index + 1}`, rows }));
+  return parseSalesGrids(grids, fallbackDate, sourceFileId, savedMappings);
 };
 
 export const parseAdsWorkbook = async (

@@ -4,6 +4,7 @@ import { normalizeArabicText } from "../normalize";
 // Order the wizard presents fields in, and their display labels.
 export const mappableFields: MappableField[] = [
   "salespersonName",
+  "salespersonCode",
   "pageName",
   "platform",
   "orders",
@@ -16,6 +17,7 @@ export const mappableFields: MappableField[] = [
 
 export const mappableFieldLabels: Record<MappableField, string> = {
   salespersonName: "Salesperson",
+  salespersonCode: "Salesperson Code",
   pageName: "Page",
   platform: "Platform",
   orders: "Orders",

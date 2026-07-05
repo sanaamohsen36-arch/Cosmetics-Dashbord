@@ -10,10 +10,15 @@ export interface OcrRequestContext {
 }
 
 export interface OcrTableResult {
-  // Row-major grid of cell text, matching the shape XLSX.utils.sheet_to_json
-  // produces with { header: 1 }. This lets OCR output run through the exact
-  // same column-detection/validation logic as an Excel upload.
-  rows: unknown[][];
+  // One row-major grid per visually distinct table in the image (e.g. a
+  // salespeople table and a separate pages/platforms table), each shaped
+  // like XLSX.utils.sheet_to_json with { header: 1 }. Kept as separate
+  // grids - not flattened into one - because two tables in the same image
+  // commonly have different column counts/order; forcing them into a
+  // single grid under one header row causes column misalignment. Each
+  // grid runs through the exact same column-detection/validation logic as
+  // an Excel sheet.
+  tables: unknown[][][];
   warnings: string[];
   providerId: string;
 }

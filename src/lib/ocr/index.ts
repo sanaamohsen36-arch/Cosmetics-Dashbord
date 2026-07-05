@@ -10,6 +10,7 @@ export const getOcrProvider = (): OcrProvider => {
   const providerId = (process.env.OCR_PROVIDER || "gemini-vision").toLowerCase();
   switch (providerId) {
     case "gemini-vision":
+    case "gemini":
       return new GeminiVisionProvider();
     default:
       throw new Error(
