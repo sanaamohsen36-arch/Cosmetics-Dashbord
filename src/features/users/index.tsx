@@ -1,14 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { KeyRound, UserPlus, Users as UsersIcon } from "lucide-react";
+import { Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
 import type { Role } from "../../types";
 import { isAuthEnabled } from "../../lib/auth";
 import { allRoles, ROLE_CAPABILITIES, can, roleLabels } from "../../lib/permissions";
 import { Badge, SimpleTable } from "../../lib/ui";
-import { inviteUser, listAllUsers, sendPasswordReset, updateUser, type AdminUser } from "../../lib/adminUsers";
+import { deleteUser, inviteUser, listAllUsers, updateUser, type AdminUser } from "../../lib/adminUsers";
 
-export function UsersPage() {
+export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
   const [users, setUsers] = useState<AdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -60,18 +60,6 @@ export function UsersPage() {
     }
   };
 
-  const toggleActive = async (id: string, active: boolean) => {
-    const confirmed = window.confirm(active ? "Disable this user? They will not be able to sign in." : "Enable this user again?");
-    if (!confirmed) return;
-    setError("");
-    try {
-      await updateUser(id, { active: !active });
-      setUsers((prev) => prev.map((item) => (item.id === id ? { ...item, active: !active } : item)));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
-
   const renameUser = async (id: string, currentName: string) => {
     const next = window.prompt("Display name", currentName);
     if (next === null || !next.trim() || next.trim() === currentName) return;
@@ -84,13 +72,16 @@ export function UsersPage() {
     }
   };
 
-  const resetPassword = async (id: string, userEmail: string) => {
-    const confirmed = window.confirm(`Send a password reset email to ${userEmail}?`);
+  // Permanent delete, never a disable - the Auth user and profile row are
+  // both removed, so the email is free to invite again later.
+  const removeUser = async (id: string) => {
+    const confirmed = window.confirm("Are you sure you want to permanently delete this user?");
     if (!confirmed) return;
     setError("");
     try {
-      await sendPasswordReset(id);
-      setMessage(`تم إرسال رابط إعادة تعيين كلمة المرور إلى ${userEmail}.`);
+      await deleteUser(id);
+      setUsers((prev) => prev.filter((item) => item.id !== id));
+      setMessage("تم حذف المستخدم بنجاح.");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -103,7 +94,7 @@ export function UsersPage() {
           <UsersIcon />
           <div>
             <h2>Users</h2>
-            <p>إدارة المستخدمين والأدوار - متاحة لـ Owner فقط. لا يتم حذف أي حساب نهائيًا، فقط تعطيله.</p>
+            <p>إدارة المستخدمين والأدوار - متاحة لـ Owner فقط. الحذف نهائي ويحرر البريد الإلكتروني لدعوة جديدة لاحقًا.</p>
           </div>
         </div>
         {!isAuthEnabled && (
@@ -144,29 +135,36 @@ export function UsersPage() {
         ) : users.length === 0 ? (
           <tr><td colSpan={6}>لا يوجد مستخدمون بعد.</td></tr>
         ) : (
-          users.map((user) => (
-            <tr key={user.id}>
-              <td>{user.displayName}</td>
-              <td>{user.email}</td>
-              <td>
-                <select value={user.role} onChange={(event) => changeRole(user.id, event.target.value as Role)}>
-                  {allRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
-                </select>
-              </td>
-              <td><Badge text={user.active ? "Active" : "Disabled"} /></td>
-              <td>{user.lastSignInAt ? new Date(user.lastSignInAt).toLocaleString("ar-EG") : "لم يسجل دخول بعد"}</td>
-              <td className="actions">
-                <button className="ghost" onClick={() => renameUser(user.id, user.displayName)}>Edit</button>
-                <button className="ghost" onClick={() => resetPassword(user.id, user.email)}>
-                  <KeyRound size={16} />
-                  Reset Password
-                </button>
-                <button className="ghost" onClick={() => toggleActive(user.id, user.active)}>
-                  {user.active ? "Disable" : "Enable"}
-                </button>
-              </td>
-            </tr>
-          ))
+          users.map((user) => {
+            const ownerCount = users.filter((item) => item.role === "owner").length;
+            const isSelf = user.id === currentUserId;
+            const isLastOwner = user.role === "owner" && ownerCount <= 1;
+            return (
+              <tr key={user.id}>
+                <td>{user.displayName}</td>
+                <td>{user.email}</td>
+                <td>
+                  <select value={user.role} onChange={(event) => changeRole(user.id, event.target.value as Role)}>
+                    {allRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
+                  </select>
+                </td>
+                <td><Badge text={user.active ? "Active" : "Disabled"} /></td>
+                <td>{user.lastSignInAt ? new Date(user.lastSignInAt).toLocaleString("ar-EG") : "لم يسجل دخول بعد"}</td>
+                <td className="actions">
+                  <button className="ghost" onClick={() => renameUser(user.id, user.displayName)}>Edit</button>
+                  <button
+                    className="ghost"
+                    disabled={isSelf || isLastOwner}
+                    title={isSelf ? "لا يمكنك حذف حسابك الحالي." : isLastOwner ? "لا يمكن حذف آخر Owner." : undefined}
+                    onClick={() => removeUser(user.id)}
+                  >
+                    <Trash2 size={16} />
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            );
+          })
         )}
       </SimpleTable>
 
