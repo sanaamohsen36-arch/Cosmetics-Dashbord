@@ -114,7 +114,11 @@ function AdsUploadCard({
   brandName?: string;
   selectedAdsPlatform?: string;
 }) {
-  const [file, setFile] = useState<File | null>(null);
+  // Multiple files can be selected together (one platform can have multiple
+  // ad accounts, each exported to its own file) - all are parsed and their
+  // rows combined into one preview/save batch, never one silently replacing
+  // another.
+  const [files, setFiles] = useState<File[]>([]);
   const [reportDate, setReportDate] = useState(fixedDate || today);
   const [rows, setRows] = useState<AdsRow[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -122,33 +126,40 @@ function AdsUploadCard({
   const [isSaving, setIsSaving] = useState(false);
   const activeDate = fixedDate || reportDate;
   const preview = async () => {
-    if (!file) return;
-    setMessage("جار قراءة ملف الإعلانات...");
-    const parsed = await parseAdsWorkbook(file, platform, activeDate, createId());
-    setRows(
-      parsed.rows.map((row) => ({
-        ...row,
-        salesPlatformName: brandName,
-        adAccountName: selectedAdsPlatform,
-        // Resolve the "results" style column (messages/leads/purchases) once, here,
-        // so the preview table shows the real value and is editable like any other field.
-        leads: Number(row.resultsCount) || row.leads || row.purchases || 0,
-        cpc: Number(row.costPerResult) || row.cpc || 0
-      }))
-    );
-    setErrors(parsed.errors);
-    setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
+    if (!files.length) return;
+    setMessage(files.length > 1 ? `جار قراءة ${files.length} ملفات إعلانات...` : "جار قراءة ملف الإعلانات...");
+    const combinedRows: AdsRow[] = [];
+    const combinedErrors: string[] = [];
+    for (const currentFile of files) {
+      const parsed = await parseAdsWorkbook(currentFile, platform, activeDate, createId());
+      combinedRows.push(
+        ...parsed.rows.map((row) => ({
+          ...row,
+          salesPlatformName: brandName,
+          adAccountName: selectedAdsPlatform,
+          // Resolve the "results" style column (messages/leads/purchases) once, here,
+          // so the preview table shows the real value and is editable like any other field.
+          leads: Number(row.resultsCount) || row.leads || row.purchases || 0,
+          cpc: Number(row.costPerResult) || row.cpc || 0
+        }))
+      );
+      combinedErrors.push(...parsed.errors.map((error) => (files.length > 1 ? `${currentFile.name}: ${error}` : error)));
+    }
+    setRows(combinedRows);
+    setErrors(combinedErrors);
+    setMessage(combinedErrors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
   };
 
   const save = async () => {
-    if (!file || errors.length) return;
+    if (!files.length || errors.length) return;
     setIsSaving(true);
     const sourceFileId = createId();
     const now = new Date().toISOString();
+    const combinedFileName = files.map((item) => item.name).join(", ");
     const rawFile: AdsRawFile = {
       id: sourceFileId,
-      fileName: file.name,
-      filePath: file.name,
+      fileName: combinedFileName,
+      filePath: combinedFileName,
       uploadedAt: now,
       reportDate: activeDate,
       adsPlatform: platform,
@@ -171,7 +182,7 @@ function AdsUploadCard({
     }));
     const next = await saveAdsUpload(data, rawFile, normalizedRows, platform, "merge");
     setData(next);
-    setMessage(`تم حفظ ملف ${selectedAdsPlatform} بدون حذف الملفات الأخرى لنفس اليوم.`);
+    setMessage(`تم حفظ بيانات ${selectedAdsPlatform} (${files.length} ملف) بدون حذف الملفات الأخرى لنفس اليوم.`);
     setIsSaving(false);
   };
 
@@ -185,7 +196,8 @@ function AdsUploadCard({
         </div>
       </div>
       <div className="upload-box">
-        <input accept=".xlsx,.xls,.csv" type="file" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+        <input accept=".xlsx,.xls,.csv" type="file" multiple onChange={(event) => setFiles(Array.from(event.target.files ?? []))} />
+        {files.length > 1 && <p className="status-line">{files.length} ملفات محددة: {files.map((item) => item.name).join(", ")}</p>}
         {!fixedDate && (
           <label>
             Select Report Date
@@ -193,7 +205,7 @@ function AdsUploadCard({
           </label>
         )}
         <div className="actions">
-          <button className="primary" disabled={!file} onClick={preview}>Preview</button>
+          <button className="primary" disabled={!files.length} onClick={preview}>Preview</button>
           {rows.length > 0 ? (
             <button className="success" disabled={isSaving || errors.length > 0} onClick={save}>
               <Save size={18} />

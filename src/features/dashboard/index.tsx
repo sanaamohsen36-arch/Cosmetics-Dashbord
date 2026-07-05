@@ -87,6 +87,7 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
         <KpiCard label="TikTok Spend" value={money(kpis.tiktokSpend)} />
         <KpiCard label="ROAS" value={ratio(kpis.roas)} />
         <KpiCard label="ROI" value={percent(kpis.roi)} />
+        <KpiCard label="Spend Ratio" value={percent(kpis.spendToSalesRatio)} />
         <KpiCard label="CPA" value={money(kpis.cpa)} />
         <KpiCard label="Messages" value={integer(kpis.messagesCount)} />
         <KpiCard label="Comments" value={integer(kpis.commentsCount)} />

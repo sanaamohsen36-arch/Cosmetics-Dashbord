@@ -59,7 +59,7 @@ export function PageReportPage({ data, range, setRange }: { data: AppData; range
           </ResponsiveContainer>
         </ChartPanel>
       </section>
-      <SimpleTable title="Page performance" headers={["Page", "Orders", "Revenue", "Order Share", "Revenue Share", "AOV", "Related Spend", "ROAS", "CPA"]}>
+      <SimpleTable title="Page performance" headers={["Page", "Orders", "Revenue", "Order Share", "Revenue Share", "AOV", "Related Spend", "ROAS", "CPA", "Spend Ratio"]}>
         {platforms.map((row) => {
           const relatedSpend = adsRows
             .filter((ad) => ad.salesPlatformName === row.platformName || ad.adAccountName === row.platformName)
@@ -75,6 +75,7 @@ export function PageReportPage({ data, range, setRange }: { data: AppData; range
               <td>{money(relatedSpend)}</td>
               <td>{ratio(relatedSpend ? row.totalRevenue / relatedSpend : null)}</td>
               <td>{money(row.totalOrders && relatedSpend ? relatedSpend / row.totalOrders : null)}</td>
+              <td>{percent(row.totalRevenue ? (relatedSpend / row.totalRevenue) * 100 : null)}</td>
             </tr>
           );
         })}
