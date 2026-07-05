@@ -9,30 +9,34 @@ import {
   Settings,
   UploadCloud,
   UserCircle,
+  UserCog,
   Users
 } from "lucide-react";
-import type { AppData, DateRange, PageKey, Profile } from "./types";
+import type { AppData, Capability, DateRange, PageKey, Profile } from "./types";
 import { makePeriodRange, today } from "./lib/date";
 import { DateFilters } from "./lib/ui";
 import { emptyData, getStorageMode, loadData, saveData, subscribeToDataChanges } from "./lib/supabase";
 import { isAuthEnabled, getCurrentProfile, onAuthStateChange } from "./lib/auth";
-import { roleLabels } from "./lib/permissions";
+import { can, effectiveRole, roleLabels } from "./lib/permissions";
 import { LoginForm, SignOutButton } from "./features/auth";
 import { NotificationBell } from "./features/notifications";
+import { ForbiddenPage } from "./features/forbidden";
 import { SalesFolderPage } from "./features/sales-upload";
 import { AdsFolderPage } from "./features/ads-upload";
 import { DashboardPage } from "./features/dashboard";
 import { SalesReportsPage } from "./features/sales-report";
 import { PageReportPage } from "./features/page-report";
 import { SettingsPage } from "./features/settings";
+import { UsersPage } from "./features/users";
 
-const navItems: Array<{ key: PageKey; label: string; icon: ReactNode }> = [
-  { key: "dashboard", label: "Home Dashboard", icon: <LayoutDashboard size={18} /> },
-  { key: "sales-upload", label: "Sales Upload", icon: <UploadCloud size={18} /> },
-  { key: "ads-upload", label: "Ads Upload", icon: <FolderOpen size={18} /> },
-  { key: "sales-report", label: "Sales Report", icon: <Users size={18} /> },
-  { key: "page-report", label: "Page Report", icon: <BarChart3 size={18} /> },
-  { key: "settings", label: "Settings", icon: <Settings size={18} /> }
+const navItems: Array<{ key: PageKey; label: string; icon: ReactNode; capability: Capability }> = [
+  { key: "dashboard", label: "Home Dashboard", icon: <LayoutDashboard size={18} />, capability: "dashboard.view" },
+  { key: "sales-upload", label: "Sales Upload", icon: <UploadCloud size={18} />, capability: "sales_upload.view" },
+  { key: "ads-upload", label: "Ads Upload", icon: <FolderOpen size={18} />, capability: "ads_upload.view" },
+  { key: "sales-report", label: "Sales Report", icon: <Users size={18} />, capability: "reports.view" },
+  { key: "page-report", label: "Page Report", icon: <BarChart3 size={18} />, capability: "reports.view" },
+  { key: "settings", label: "Settings", icon: <Settings size={18} />, capability: "settings.view" },
+  { key: "users", label: "Users", icon: <UserCog size={18} />, capability: "users.view" }
 ];
 
 export default function DashboardApp() {
@@ -91,6 +95,14 @@ export default function DashboardApp() {
     await saveData(next);
   };
 
+  // Real access boundary: computed once per render, used both to hide
+  // sidebar entries (convenience) and to gate what actually renders below
+  // (the boundary that matters - visiting a hidden page still hits this).
+  const role = effectiveRole(profile, isAuthEnabled);
+  const visibleNavItems = navItems.filter((item) => can(role, item.capability));
+  const activeNavItem = navItems.find((item) => item.key === page);
+  const hasPageAccess = activeNavItem ? can(role, activeNavItem.capability) : false;
+
   return (
     <div className={`app-shell ${theme}`} dir="rtl">
       <aside className="sidebar">
@@ -102,7 +114,7 @@ export default function DashboardApp() {
           </div>
         </div>
         <nav>
-          {navItems.map((item) => (
+          {visibleNavItems.map((item) => (
             <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => setPage(item.key)}>
               {item.icon}
               {item.label}
@@ -123,7 +135,7 @@ export default function DashboardApp() {
         <header className="topbar">
           <div>
             <p className="eyebrow">{getStorageMode()} Live</p>
-            <h1>{navItems.find((item) => item.key === page)?.label}</h1>
+            <h1>{activeNavItem?.label}</h1>
             <p className="sync-status">متصل بقاعدة البيانات، وأي حفظ جديد ينعكس على اللوحة.</p>
           </div>
           <div className="topbar-actions">
@@ -137,12 +149,14 @@ export default function DashboardApp() {
           </div>
         </header>
 
-        {page === "dashboard" && <DashboardPage data={data} range={range} />}
-        {page === "sales-upload" && <SalesFolderPage data={data} setData={setData} />}
-        {page === "ads-upload" && <AdsFolderPage data={data} setData={setData} />}
-        {page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
-        {page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
-        {page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
+        {!hasPageAccess && <ForbiddenPage pageLabel={activeNavItem?.label ?? page} />}
+        {hasPageAccess && page === "dashboard" && <DashboardPage data={data} range={range} />}
+        {hasPageAccess && page === "sales-upload" && <SalesFolderPage data={data} setData={setData} />}
+        {hasPageAccess && page === "ads-upload" && <AdsFolderPage data={data} setData={setData} />}
+        {hasPageAccess && page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
+        {hasPageAccess && page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
+        {hasPageAccess && page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
+        {hasPageAccess && page === "users" && <UsersPage />}
       </main>
     </div>
   );
