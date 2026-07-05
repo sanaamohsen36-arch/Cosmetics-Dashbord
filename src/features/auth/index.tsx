@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { LogIn } from "lucide-react";
 import { signInWithPassword, signOut } from "../../lib/auth";
 
@@ -9,6 +9,16 @@ export function LoginForm({ onSignedIn, errorMessage }: { onSignedIn: () => void
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  // Set from Set Password page's redirect (window.location.href =
+  // "/?activated=1") after an invited user successfully creates their
+  // password - plain query-string check, no next/navigation dependency.
+  const [justActivated, setJustActivated] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("activated") === "1") {
+      setJustActivated(true);
+    }
+  }, []);
 
   const submit = async () => {
     setLoading(true);
@@ -39,6 +49,9 @@ export function LoginForm({ onSignedIn, errorMessage }: { onSignedIn: () => void
             <p>Sales + Ads BI Dashboard</p>
           </div>
         </div>
+        {justActivated && (
+          <p className="notice success-note">Your account has been activated successfully. Please sign in.</p>
+        )}
         <label>
           Email
           <input type="email" value={email} autoComplete="username" onChange={(event) => setEmail(event.target.value)} required />
