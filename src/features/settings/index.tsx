@@ -30,6 +30,7 @@ export function SettingsPage({
   const [platformName, setPlatformName] = useState("");
   const [salespersonName, setSalespersonName] = useState("");
   const [salespersonCode, setSalespersonCode] = useState("");
+  const [brandName, setBrandName] = useState("");
   const role = effectiveRole(profile);
 
   const addPlatform = async () => {
@@ -50,6 +51,15 @@ export function SettingsPage({
     });
     setSalespersonName("");
     setSalespersonCode("");
+  };
+
+  const addBrand = async () => {
+    if (!brandName.trim()) return;
+    await commitData({
+      ...data,
+      brands: [...data.brands, { id: createId(), name: brandName.trim(), active: true }]
+    });
+    setBrandName("");
   };
 
   return (
@@ -79,6 +89,18 @@ export function SettingsPage({
           <button className="primary" onClick={addSalesperson}>Add</button>
         </div>
         <ul className="settings-list">{data.salespeople.map((item) => <li key={item.id}>{item.name} {item.code ? `(${item.code})` : ""}</li>)}</ul>
+      </section>
+      <section className="panel">
+        <h2>Manage brands</h2>
+        <p className="status-line">كل رفع (Sales أو Ads) ينتمي لـ Brand واحد فقط - لا يمكن لملف واحد أن يخص أكثر من Brand.</p>
+        <div className="form-row">
+          <label>
+            Brand name
+            <input value={brandName} onChange={(event) => setBrandName(event.target.value)} />
+          </label>
+          <button className="primary" onClick={addBrand}>Add</button>
+        </div>
+        <ul className="settings-list">{data.brands.map((item) => <li key={item.id}>{item.name}</li>)}</ul>
       </section>
       <section className="panel wide">
         <h2>Ads platform mapping</h2>

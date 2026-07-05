@@ -3,6 +3,7 @@ import type {
   AdsRawFile,
   AdsRow,
   AppData,
+  BrandMaster,
   ColumnMapping,
   MappableField,
   OcrPageCorrection,
@@ -17,6 +18,7 @@ import type {
 } from "../../types";
 import type { AppNotification, AuditLogEntry, BackupRun, Profile, SystemHealthStatus } from "../../types";
 import { isSubtotalPlatformName } from "../metrics";
+import { brandOptions } from "../constants";
 import { isSupabaseConfigured, supabase } from "./client";
 import { getCurrentProfile } from "../auth";
 import { logAction } from "../audit";
@@ -86,6 +88,7 @@ export const emptyData = (): AppData => ({
     active: true
   })),
   columnMappings: [],
+  brands: brandOptions.map((name) => ({ id: createId(), name, active: true })),
   profiles: [],
   auditLog: [],
   backupRuns: [],
@@ -122,6 +125,14 @@ const mergeDefaultPlatformMasters = (platforms: PlatformMaster[] = []) => {
   return [...platforms, ...missing];
 };
 
+const mergeDefaultBrands = (brands: BrandMaster[] = []) => {
+  const seen = new Set(brands.map((item) => item.name.trim().toLowerCase()));
+  const missing = brandOptions
+    .filter((name) => !seen.has(name.trim().toLowerCase()))
+    .map((name) => ({ id: createId(), name, active: true }));
+  return [...brands, ...missing];
+};
+
 export const loadData = async (): Promise<AppData> => {
   if (!supabase) return loadLocalData();
 
@@ -138,6 +149,7 @@ export const loadData = async (): Promise<AppData> => {
     ocrSalespersonCorrections,
     salespeople,
     platforms,
+    brands,
     columnMappings,
     profiles,
     auditLog,
@@ -156,6 +168,7 @@ export const loadData = async (): Promise<AppData> => {
     selectOptionalAll("ocr_salesperson_corrections"),
     selectOptionalAll("salespeople"),
     selectOptionalAll("platforms"),
+    selectOptionalAll("brands"),
     selectOptionalAll("column_mappings"),
     selectOptionalAll("profiles"),
     selectOptionalAll("audit_log"),
@@ -183,6 +196,7 @@ export const loadData = async (): Promise<AppData> => {
     ocrSalespersonCorrections: ocrSalespersonCorrections.map(fromOcrSalespersonCorrection),
     salespeople: salespeople.map(fromSalespersonMaster),
     platforms: mergeDefaultPlatformMasters(platforms.map(fromPlatformMaster)),
+    brands: mergeDefaultBrands(brands.map(fromBrandMaster)),
     columnMappings: columnMappings.map(fromColumnMapping),
     profiles: profiles.map(fromProfileRow),
     auditLog: auditLog.map(fromAuditLogRow),
@@ -210,6 +224,7 @@ export const saveData = async (data: AppData) => {
   await insertOptionalRows("ocr_salesperson_corrections", data.ocrSalespersonCorrections.map(toOcrSalespersonCorrectionRow));
   await insertOptionalRows("salespeople", data.salespeople.map(toSalespersonMasterRow));
   await insertOptionalRows("platforms", data.platforms.map(toPlatformMasterRow));
+  await insertOptionalRows("brands", data.brands.map(toBrandMasterRow));
   await insertOptionalRows("column_mappings", data.columnMappings.map(toColumnMappingRow));
   await refreshDailySummary(data);
 };
@@ -372,6 +387,7 @@ export const subscribeToDataChanges = (onChange: () => void) => {
     .on("postgres_changes", { event: "*", schema: "public", table: "ocr_salesperson_corrections" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "salespeople" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "platforms" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "brands" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "column_mappings" }, onChange)
     .subscribe();
 
@@ -388,6 +404,9 @@ const loadLocalData = (): AppData => {
     return {
       ...emptyData(),
       ...parsed,
+      salesRawFiles: (parsed.salesRawFiles ?? []).map((file) => ({ ...file, brandName: file.brandName || "غير محدد" })),
+      salesBySalesperson: (parsed.salesBySalesperson ?? []).map((row) => ({ ...row, brandName: row.brandName || "غير محدد" })),
+      salesByPlatform: (parsed.salesByPlatform ?? []).map((row) => ({ ...row, brandName: row.brandName || "غير محدد" })),
       adsRawFiles: (parsed.adsRawFiles ?? []).map((file) => ({
         ...file,
         salesPlatformName: file.salesPlatformName || "غير محدد",
@@ -402,6 +421,7 @@ const loadLocalData = (): AppData => {
       ocrSalespersonCorrections: parsed.ocrSalespersonCorrections ?? [],
       salespeople: parsed.salespeople ?? [],
       platforms: mergeDefaultPlatformMasters(parsed.platforms ?? []),
+      brands: mergeDefaultBrands(parsed.brands ?? []),
       columnMappings: parsed.columnMappings ?? [],
       profiles: parsed.profiles ?? [],
       auditLog: parsed.auditLog ?? [],
@@ -495,6 +515,7 @@ const deleteAllTables = async () => {
   await deleteOptionalAll("ocr_salesperson_corrections");
   await deleteOptionalAll("salespeople");
   await deleteOptionalAll("platforms");
+  await deleteOptionalAll("brands");
   await deleteOptionalAll("column_mappings");
 };
 
@@ -558,7 +579,10 @@ export const saveSalesUpload = async (
   mode: UploadMode
 ): Promise<AppData> => {
   if (mode === "cancel") return current;
-  const previousFile = current.salesRawFiles.find((file) => file.reportDate === rawFile.reportDate && file.isCurrent);
+  // One upload = one brand (docs/ARCHITECTURE.md section 19): a day+brand
+  // pair is one versioned slot, same as Ads' day+platform+brand+account slot.
+  const matchesSlot = (file: SalesRawFile) => file.reportDate === rawFile.reportDate && file.brandName === rawFile.brandName;
+  const previousFile = current.salesRawFiles.find((file) => matchesSlot(file) && file.isCurrent);
   const versionedFile: SalesRawFile = {
     ...rawFile,
     version: mode === "replace" && previousFile ? previousFile.version + 1 : 1,
@@ -570,12 +594,16 @@ export const saveSalesUpload = async (
       ? {
           ...current,
           salesRawFiles: current.salesRawFiles.map((file) =>
-            file.reportDate === rawFile.reportDate && file.isCurrent
+            matchesSlot(file) && file.isCurrent
               ? { ...file, isCurrent: false, supersededAt: rawFile.createdAt, supersededBy: versionedFile.id }
               : file
           ),
-          salesBySalesperson: current.salesBySalesperson.filter((row) => row.reportDate !== rawFile.reportDate),
-          salesByPlatform: current.salesByPlatform.filter((row) => row.reportDate !== rawFile.reportDate)
+          salesBySalesperson: current.salesBySalesperson.filter(
+            (row) => !(row.reportDate === rawFile.reportDate && row.brandName === rawFile.brandName)
+          ),
+          salesByPlatform: current.salesByPlatform.filter(
+            (row) => !(row.reportDate === rawFile.reportDate && row.brandName === rawFile.brandName)
+          )
         }
       : current;
 
@@ -783,6 +811,7 @@ const fromSalesRawFile = (row: any): SalesRawFile => ({
   filePath: row.file_url,
   uploadedAt: row.uploaded_at,
   reportDate: row.report_date,
+  brandName: row.brand_name || "غير محدد",
   ocrStatus: row.ocr_status,
   createdAt: row.created_at,
   version: Number(row.version) || 1,
@@ -797,6 +826,7 @@ const toSalesRawFileRow = (row: SalesRawFile) => ({
   file_url: row.filePath,
   uploaded_at: row.uploadedAt,
   report_date: row.reportDate,
+  brand_name: row.brandName,
   ocr_status: row.ocrStatus,
   created_at: row.createdAt,
   version: row.version,
@@ -808,6 +838,7 @@ const toSalesRawFileRow = (row: SalesRawFile) => ({
 const fromSalesperson = (row: any): SalesBySalesperson => ({
   id: row.id,
   reportDate: row.report_date,
+  brandName: row.brand_name || "غير محدد",
   salespersonName: row.salesperson_name,
   salespersonCode: row.salesperson_code,
   morningOrders: Number(row.morning_orders) || 0,
@@ -823,6 +854,7 @@ const fromSalesperson = (row: any): SalesBySalesperson => ({
 const toSalespersonRow = (row: SalesBySalesperson) => ({
   id: row.id,
   report_date: row.reportDate,
+  brand_name: row.brandName,
   salesperson_name: row.salespersonName,
   salesperson_code: row.salespersonCode,
   morning_orders: row.morningOrders,
@@ -838,6 +870,7 @@ const toSalespersonRow = (row: SalesBySalesperson) => ({
 const fromPlatformSales = (row: any): SalesByPlatform => ({
   id: row.id,
   reportDate: row.report_date,
+  brandName: row.brand_name || "غير محدد",
   platformName: row.platform_name,
   morningOrders: Number(row.morning_orders) || 0,
   morningRevenue: Number(row.morning_revenue) || 0,
@@ -852,6 +885,7 @@ const fromPlatformSales = (row: any): SalesByPlatform => ({
 const toPlatformSalesRow = (row: SalesByPlatform) => ({
   id: row.id,
   report_date: row.reportDate,
+  brand_name: row.brandName,
   platform_name: row.platformName,
   morning_orders: row.morningOrders,
   morning_revenue: row.morningRevenue,
@@ -1047,6 +1081,18 @@ const toPlatformMasterRow = (row: PlatformMaster) => ({
   active: row.active
 });
 
+const fromBrandMaster = (row: any): BrandMaster => ({
+  id: row.id,
+  name: row.name || "",
+  active: Boolean(row.active)
+});
+
+const toBrandMasterRow = (row: BrandMaster) => ({
+  id: row.id,
+  name: row.name,
+  active: row.active
+});
+
 const fromColumnMapping = (row: any): ColumnMapping => ({
   id: row.id,
   signature: row.signature,
@@ -1080,6 +1126,7 @@ const BACKUP_TABLES = [
   "ocr_salesperson_corrections",
   "salespeople",
   "platforms",
+  "brands",
   "column_mappings",
   "profiles",
   "audit_log"

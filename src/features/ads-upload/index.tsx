@@ -14,7 +14,13 @@ export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data
   // WhatsApp Ads, TikTok Ads, WhatsApp TikTok Ads, Other); brand is a
   // secondary selector within a platform, not the top-level nav.
   const [platformName, setPlatformName] = useState(adsPlatformOptions[0]);
-  const knownBrands = [...new Set([...brandOptions, ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)])];
+  const knownBrands = [
+    ...new Set([
+      ...data.brands.filter((item) => item.active).map((item) => item.name),
+      ...brandOptions,
+      ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)
+    ])
+  ];
   const [brand, setBrand] = useState(knownBrands[0] || brandOptions[0]);
   const [selectedDate, setSelectedDate] = useState(today);
   const [statusMessage, setStatusMessage] = useState("");

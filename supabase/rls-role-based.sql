@@ -64,6 +64,11 @@ create policy "role_write_platforms" on public.platforms for all
   using (public.current_role() in ('owner','marketing_manager','sales_manager'))
   with check (public.current_role() in ('owner','marketing_manager','sales_manager'));
 
+drop policy if exists "public_write_brands" on public.brands;
+create policy "role_write_brands" on public.brands for all
+  using (public.current_role() in ('owner','marketing_manager','sales_manager'))
+  with check (public.current_role() in ('owner','marketing_manager','sales_manager'));
+
 -- Profiles: anyone reads (role display), only Owner assigns/changes roles.
 drop policy if exists "public_write_profiles" on public.profiles;
 create policy "role_write_own_profile" on public.profiles for update

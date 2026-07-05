@@ -19,11 +19,15 @@ export interface SalesRawFile {
   isCurrent: boolean;
   supersededAt?: string | null;
   supersededBy?: string | null;
+  // Every upload belongs to exactly one brand, never a mix (decision: "one
+  // upload = one brand", docs/ARCHITECTURE.md section 19).
+  brandName: string;
 }
 
 export interface SalesBySalesperson {
   id: string;
   reportDate: string;
+  brandName: string;
   salespersonName: string;
   salespersonCode: string;
   morningOrders: number;
@@ -46,6 +50,7 @@ export interface SalesBySalesperson {
 export interface SalesByPlatform {
   id: string;
   reportDate: string;
+  brandName: string;
   platformCategory?: string;
   groupType?: SalesGroupType;
   rowType?: SalesRowType;
@@ -146,6 +151,12 @@ export interface PlatformMaster {
   id: string;
   name: string;
   aliases: string[];
+  active: boolean;
+}
+
+export interface BrandMaster {
+  id: string;
+  name: string;
   active: boolean;
 }
 
@@ -281,6 +292,7 @@ export interface AppData {
   ocrSalespersonCorrections: OcrSalespersonCorrection[];
   salespeople: SalespersonMaster[];
   platforms: PlatformMaster[];
+  brands: BrandMaster[];
   columnMappings: ColumnMapping[];
   profiles: Profile[];
   auditLog: AuditLogEntry[];

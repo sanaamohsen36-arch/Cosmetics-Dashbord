@@ -194,6 +194,7 @@ const readManualMappedRow = (
       {
         id: createId(),
         reportDate: fallbackDate,
+        brandName: "",
         salespersonName: name,
         salespersonCode: code,
         morningOrders: 0,
@@ -222,6 +223,7 @@ const readManualMappedRow = (
       {
         id: createId(),
         reportDate: fallbackDate,
+        brandName: "",
         platformCategory: category,
         groupType: classifySalesGroup(pageName, category),
         rowType: classifySalesRowType(pageName),
@@ -499,6 +501,7 @@ const readPeopleRow = (
     {
       id: createId(),
       reportDate: normalizeExcelDate(row[columns.date]) || fallbackDate,
+      brandName: "",
       salespersonName: name,
       salespersonCode: code,
       morningOrders: 0,
@@ -546,6 +549,7 @@ const readPlatformRow = (
     {
       id: createId(),
       reportDate: normalizeExcelDate(row[columns.date]) || fallbackDate,
+      brandName: "",
       platformCategory: category,
       groupType,
       rowType,

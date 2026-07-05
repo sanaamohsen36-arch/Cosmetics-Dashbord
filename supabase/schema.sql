@@ -135,6 +135,14 @@ create table if not exists public.platforms (
   active boolean not null default true
 );
 
+-- Section 19 decision: one upload = one brand, never a mix. Master list of
+-- brands, mirroring platforms/salespeople above.
+create table if not exists public.brands (
+  id text primary key,
+  name text not null unique,
+  active boolean not null default true
+);
+
 -- Column-mapping wizard memory: a user-confirmed column layout for a sales
 -- upload, keyed by the exact header signature it was confirmed for, so the
 -- same file structure is recognized automatically next time instead of
@@ -182,8 +190,15 @@ alter table public.sales_raw_files add column if not exists version integer not 
 alter table public.sales_raw_files add column if not exists is_current boolean not null default true;
 alter table public.sales_raw_files add column if not exists superseded_at timestamptz;
 alter table public.sales_raw_files add column if not exists superseded_by text;
-create unique index if not exists idx_sales_raw_files_current_per_day
-  on public.sales_raw_files(report_date) where is_current;
+
+-- Section 19 decision: one upload = one brand. A versioned slot is now
+-- (report_date, brand_name), not just report_date, matching Ads below.
+alter table public.sales_raw_files add column if not exists brand_name text not null default 'غير محدد';
+alter table public.sales_by_salesperson add column if not exists brand_name text not null default 'غير محدد';
+alter table public.sales_by_platform add column if not exists brand_name text not null default 'غير محدد';
+drop index if exists idx_sales_raw_files_current_per_day;
+create unique index if not exists idx_sales_raw_files_current_slot
+  on public.sales_raw_files(report_date, brand_name) where is_current;
 
 alter table public.ads_raw_files add column if not exists version integer not null default 1;
 alter table public.ads_raw_files add column if not exists is_current boolean not null default true;
@@ -274,6 +289,7 @@ alter table public.ocr_page_corrections enable row level security;
 alter table public.ocr_salesperson_corrections enable row level security;
 alter table public.salespeople enable row level security;
 alter table public.platforms enable row level security;
+alter table public.brands enable row level security;
 alter table public.column_mappings enable row level security;
 alter table public.profiles enable row level security;
 alter table public.audit_log enable row level security;
@@ -340,6 +356,11 @@ drop policy if exists "public_select_platforms" on public.platforms;
 drop policy if exists "public_write_platforms" on public.platforms;
 create policy "public_select_platforms" on public.platforms for select using (true);
 create policy "public_write_platforms" on public.platforms for all using (true) with check (true);
+
+drop policy if exists "public_select_brands" on public.brands;
+drop policy if exists "public_write_brands" on public.brands;
+create policy "public_select_brands" on public.brands for select using (true);
+create policy "public_write_brands" on public.brands for all using (true) with check (true);
 
 drop policy if exists "public_select_column_mappings" on public.column_mappings;
 drop policy if exists "public_write_column_mappings" on public.column_mappings;
@@ -409,5 +430,8 @@ begin
   end if;
   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'platforms') then
     alter publication supabase_realtime add table public.platforms;
+  end if;
+  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'brands') then
+    alter publication supabase_realtime add table public.brands;
   end if;
 end $$;
