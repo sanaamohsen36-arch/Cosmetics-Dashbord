@@ -100,6 +100,18 @@ const processGridIntoMaps = (
   });
   console.info("Sales grid inspected", debug[debug.length - 1]);
 
+  // Two-block layout: a single sheet holding a Salespeople table (left) and
+  // a Pages/Platforms table (right, under a "الصفحات" title), each with its
+  // own wide morning/evening/total column pairs and no shared "shift" column.
+  // Detected and parsed by position (title + column blocks), never by
+  // flattening both tables into one row-by-row mapping - that was silently
+  // reading page-table rows as salespeople rows and vice versa. Takes
+  // priority over any learned mapping, which for this exact header shape was
+  // the thing that had learned the wrong (flattened) column assignment.
+  if (parseTwoBlockLayout(rows, headerRowIndex, gridLabel, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug)) {
+    return;
+  }
+
   const savedMapping = findSavedMapping(savedMappings, headers);
   if (savedMapping) {
     applyManualMappingToMaps(rows, headerRowIndex, savedMapping.fields, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors);
@@ -136,6 +148,274 @@ const processGridIntoMaps = (
       errors.push(error instanceof Error ? error.message : String(error));
     }
   }
+};
+
+// --- Two-block layout (Salespeople left / Pages right under "الصفحات") ---
+//
+// Both blocks are "wide": one row per entity with morning/evening/total
+// already split into their own columns (no per-row shift indicator), so
+// column identification is by keyword tokens within a bounded column
+// range, not full-string alias equality - real files vary spacing/wording
+// slightly, but "starts with صباحي and contains عدد" is stable.
+
+type PeopleWideColumns = {
+  headerRow: number;
+  code: number;
+  name: number;
+  morningOrders: number;
+  morningRevenue: number;
+  eveningOrders: number;
+  eveningRevenue: number;
+  totalOrders: number;
+  totalRevenue: number;
+};
+
+type PageWideColumns = {
+  headerRow: number;
+  page: number;
+  category: number;
+  morningOrders: number;
+  morningRevenue: number;
+  eveningOrders: number;
+  eveningRevenue: number;
+  totalOrders: number;
+  totalRevenue: number;
+};
+
+const findTitleCell = (rows: unknown[][], titleText: string): { row: number; col: number } | null => {
+  for (let r = 0; r < rows.length; r += 1) {
+    const row = rows[r];
+    for (let c = 0; c < row.length; c += 1) {
+      if (normalizeHeader(row[c]) === titleText) return { row: r, col: c };
+    }
+  }
+  return null;
+};
+
+// Finds the column whose normalized header contains every token in
+// `mustInclude`, searching [startIndex, endIndex).
+const findTokenColumn = (headers: string[], mustInclude: string[], startIndex = 0, endIndex = headers.length) => {
+  for (let c = Math.max(0, startIndex); c < Math.min(endIndex, headers.length); c += 1) {
+    const header = headers[c];
+    if (header && mustInclude.every((token) => header.includes(token))) return c;
+  }
+  return -1;
+};
+
+const detectPageWideBlock = (rows: unknown[][], titleRow: number): PageWideColumns | null => {
+  for (let r = titleRow; r < Math.min(rows.length, titleRow + 4); r += 1) {
+    const headers = rows[r].map((cell) => normalizeHeader(cell));
+    const page = findTokenColumn(headers, ["صفحه"]);
+    if (page < 0 || headers[page].includes("اجمالي")) continue;
+    return {
+      headerRow: r,
+      page,
+      category: findTokenColumn(headers, ["قسم"], 0, page),
+      morningOrders: findTokenColumn(headers, ["صباح", "عدد"], page + 1),
+      morningRevenue: findTokenColumn(headers, ["صباح", "قيمه"], page + 1),
+      eveningOrders: findTokenColumn(headers, ["مسائ", "عدد"], page + 1),
+      eveningRevenue: findTokenColumn(headers, ["مسائ", "قيمه"], page + 1),
+      totalOrders: findTokenColumn(headers, ["اجمالي", "عدد"], page + 1),
+      totalRevenue: findTokenColumn(headers, ["اجمالي", "قيمه"], page + 1)
+    };
+  }
+  return null;
+};
+
+const detectPeopleWideBlock = (rows: unknown[][], headerRowIndex: number, endCol: number): PeopleWideColumns | null => {
+  const headers = rows[headerRowIndex].map((cell) => normalizeHeader(cell));
+  const limit = endCol >= 0 ? endCol : headers.length;
+  const code = findTokenColumn(headers, ["كود"], 0, limit);
+  let name = findTokenColumn(headers, ["السيلز"], 0, limit);
+  if (name === code) name = findTokenColumn(headers, ["السيلز"], code + 1, limit);
+  if (name < 0) name = findTokenColumn(headers, ["مندوب"], 0, limit);
+  if (name < 0) return null;
+  const morningOrders = findTokenColumn(headers, ["صباح", "عدد"], name + 1, limit);
+  const morningRevenue = findTokenColumn(headers, ["صباح", "قيمه"], name + 1, limit);
+  const eveningOrders = findTokenColumn(headers, ["مسائ", "عدد"], name + 1, limit);
+  const eveningRevenue = findTokenColumn(headers, ["مسائ", "قيمه"], name + 1, limit);
+  if (morningOrders < 0 && eveningOrders < 0) return null;
+  return {
+    headerRow: headerRowIndex,
+    code,
+    name,
+    morningOrders,
+    morningRevenue,
+    eveningOrders,
+    eveningRevenue,
+    totalOrders: findTokenColumn(headers, ["اجمالي", "عدد"], name + 1, limit),
+    totalRevenue: findTokenColumn(headers, ["اجمالي", "قيمه"], name + 1, limit)
+  };
+};
+
+// Reads one shift's orders/revenue pair, tolerating a blank cell as 0
+// (per spec: "Blank evening cells = 0") without rejecting the whole row.
+const readWideAmount = (row: unknown[], col: number): number => {
+  if (col < 0 || !hasValue(row[col])) return 0;
+  try {
+    return toNumber(row[col]);
+  } catch {
+    return 0;
+  }
+};
+
+const readPeopleWideRow = (
+  row: unknown[],
+  columns: PeopleWideColumns,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string,
+  map: Map<string, SalesBySalesperson>
+) => {
+  const name = String(row[columns.name] ?? "").trim();
+  const code = columns.code >= 0 ? String(row[columns.code] ?? "").trim() : "";
+  if (!name) return;
+
+  const morningOrders = readWideAmount(row, columns.morningOrders);
+  const morningRevenue = readWideAmount(row, columns.morningRevenue);
+  const eveningOrders = readWideAmount(row, columns.eveningOrders);
+  const eveningRevenue = readWideAmount(row, columns.eveningRevenue);
+  // Trust the file's own total column when present, instead of only ever
+  // recomputing it - protects against a source file where the total was
+  // manually adjusted/rounded relative to its own morning+evening split.
+  const totalOrders = columns.totalOrders >= 0 && hasValue(row[columns.totalOrders])
+    ? readWideAmount(row, columns.totalOrders)
+    : morningOrders + eveningOrders;
+  const totalRevenue = columns.totalRevenue >= 0 && hasValue(row[columns.totalRevenue])
+    ? readWideAmount(row, columns.totalRevenue)
+    : morningRevenue + eveningRevenue;
+
+  const key = code || normalizeText(name);
+  const existing =
+    map.get(key) ??
+    {
+      id: createId(),
+      reportDate: fallbackDate,
+      brandName: "",
+      salespersonName: name,
+      salespersonCode: code,
+      morningOrders: 0,
+      morningRevenue: 0,
+      eveningOrders: 0,
+      eveningRevenue: 0,
+      totalOrders: 0,
+      totalRevenue: 0,
+      sourceFileId,
+      createdAt
+    };
+  existing.morningOrders += morningOrders;
+  existing.morningRevenue += morningRevenue;
+  existing.eveningOrders += eveningOrders;
+  existing.eveningRevenue += eveningRevenue;
+  existing.totalOrders += totalOrders;
+  existing.totalRevenue += totalRevenue;
+  map.set(key, existing);
+};
+
+const readPageWideRow = (
+  row: unknown[],
+  columns: PageWideColumns,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string,
+  map: Map<string, SalesByPlatform>
+) => {
+  const name = String(row[columns.page] ?? "").trim();
+  if (!name) return;
+
+  const category = columns.category >= 0 ? String(row[columns.category] ?? "").trim() : "";
+  const morningOrders = readWideAmount(row, columns.morningOrders);
+  const morningRevenue = readWideAmount(row, columns.morningRevenue);
+  const eveningOrders = readWideAmount(row, columns.eveningOrders);
+  const eveningRevenue = readWideAmount(row, columns.eveningRevenue);
+  const totalOrders = columns.totalOrders >= 0 && hasValue(row[columns.totalOrders])
+    ? readWideAmount(row, columns.totalOrders)
+    : morningOrders + eveningOrders;
+  const totalRevenue = columns.totalRevenue >= 0 && hasValue(row[columns.totalRevenue])
+    ? readWideAmount(row, columns.totalRevenue)
+    : morningRevenue + eveningRevenue;
+
+  const key = normalizeText(name);
+  const existing =
+    map.get(key) ??
+    {
+      id: createId(),
+      reportDate: fallbackDate,
+      brandName: "",
+      platformCategory: category,
+      groupType: classifySalesGroup(name, category),
+      rowType: classifySalesRowType(name),
+      platformName: name,
+      morningOrders: 0,
+      morningRevenue: 0,
+      eveningOrders: 0,
+      eveningRevenue: 0,
+      totalOrders: 0,
+      totalRevenue: 0,
+      sourceFileId,
+      createdAt
+    };
+  existing.morningOrders += morningOrders;
+  existing.morningRevenue += morningRevenue;
+  existing.eveningOrders += eveningOrders;
+  existing.eveningRevenue += eveningRevenue;
+  existing.totalOrders += totalOrders;
+  existing.totalRevenue += totalRevenue;
+  map.set(key, existing);
+};
+
+// Returns true (and populates the maps) when this grid matches the
+// two-block layout; false means "not this shape", let the caller fall
+// through to the existing detectors/mapping wizard.
+const parseTwoBlockLayout = (
+  rows: unknown[][],
+  headerRowIndex: number,
+  gridLabel: string,
+  fallbackDate: string,
+  sourceFileId: string,
+  now: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  platformMap: Map<string, SalesByPlatform>,
+  errors: string[],
+  debug: WorkbookDebug[]
+): boolean => {
+  const title = findTitleCell(rows, normalizeHeader("الصفحات"));
+  if (!title) return false;
+
+  const pageBlock = detectPageWideBlock(rows, title.row);
+  const peopleBlock = detectPeopleWideBlock(rows, headerRowIndex, pageBlock ? pageBlock.page : -1);
+  if (!pageBlock && !peopleBlock) return false;
+
+  const startRow = Math.max(peopleBlock?.headerRow ?? headerRowIndex, pageBlock?.headerRow ?? headerRowIndex) + 1;
+  for (let rowIndex = startRow; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (isEmptyRow(row)) continue;
+    const excelRow = rowIndex + 1;
+    if (peopleBlock) {
+      try {
+        readPeopleWideRow(row, peopleBlock, fallbackDate, sourceFileId, now, peopleMap);
+      } catch (error) {
+        errors.push(`صف ${excelRow} (السيلز): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    if (pageBlock) {
+      try {
+        readPageWideRow(row, pageBlock, fallbackDate, sourceFileId, now, platformMap);
+      } catch (error) {
+        errors.push(`صف ${excelRow} (الصفحات): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
+
+  debug.push({
+    sheetName: `${gridLabel} (two-block)`,
+    headers: [
+      ...(peopleBlock ? [{ columnIndex: peopleBlock.name, value: "salespeople-name" }] : []),
+      ...(pageBlock ? [{ columnIndex: pageBlock.page, value: "page-name" }] : [])
+    ],
+    sampleRows: rows.slice(startRow, startRow + 6)
+  });
+  return true;
 };
 
 // Reads a single row using a manual (wizard-confirmed or learned) field ->
@@ -291,6 +571,178 @@ export const applyManualColumnMapping = (
   };
 };
 
+// --- Fixed official template: Salespeople_Input + Pages_Input sheets ---
+//
+// The primary upload format: two separate sheets, each already long-format
+// (one row per entity per day, Morning/Evening/Total already split into
+// their own named columns). Salespeople and Pages are independent - a
+// salesperson row never carries a platform/page, and Pages_Input is the
+// only source of platform/page names. Matched by exact sheet name and exact
+// (not fuzzy) column-header equality, since this is a fixed contract, not a
+// format to guess at; any new salesperson/platform/page name is accepted
+// and flows through the normal syncMasterData additive-save path untouched.
+const FIXED_PEOPLE_SHEET = "salespeople_input";
+const FIXED_PAGES_SHEET = "pages_input";
+
+const findSheetByExactName = (workbook: XLSX.WorkBook, name: string) =>
+  workbook.SheetNames.find((sheetName) => sheetName.trim().toLowerCase() === name);
+
+const buildExactHeaderMap = (headers: unknown[]): HeaderMap => {
+  const map: HeaderMap = {};
+  headers.forEach((cell, index) => {
+    const key = normalizeArabicText(cell).replace(/\s+/g, " ").trim();
+    if (key) map[key] = index;
+  });
+  return map;
+};
+
+const readFixedTemplateRow = (
+  row: unknown[],
+  columns: { date: number; morningOrders: number; morningRevenue: number; eveningOrders: number; eveningRevenue: number; totalOrders: number; totalRevenue: number },
+  fallbackDate: string
+) => {
+  const reportDate = normalizeExcelDate(columns.date >= 0 ? row[columns.date] : null) || fallbackDate;
+  const morningOrders = readWideAmount(row, columns.morningOrders);
+  const morningRevenue = readWideAmount(row, columns.morningRevenue);
+  const eveningOrders = readWideAmount(row, columns.eveningOrders);
+  const eveningRevenue = readWideAmount(row, columns.eveningRevenue);
+  const totalOrders = columns.totalOrders >= 0 && hasValue(row[columns.totalOrders])
+    ? readWideAmount(row, columns.totalOrders)
+    : morningOrders + eveningOrders;
+  const totalRevenue = columns.totalRevenue >= 0 && hasValue(row[columns.totalRevenue])
+    ? readWideAmount(row, columns.totalRevenue)
+    : morningRevenue + eveningRevenue;
+  return { reportDate, morningOrders, morningRevenue, eveningOrders, eveningRevenue, totalOrders, totalRevenue };
+};
+
+const parseFixedPeopleSheet = (
+  rows: unknown[][],
+  fallbackDate: string,
+  sourceFileId: string,
+  now: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  errors: string[]
+) => {
+  const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
+  if (headerRowIndex < 0) return;
+  const map = buildExactHeaderMap(rows[headerRowIndex]);
+  const columns = {
+    date: map["date"] ?? -1,
+    code: map["salesperson code"] ?? -1,
+    name: map["salesperson"] ?? -1,
+    morningOrders: map["morning orders"] ?? -1,
+    morningRevenue: map["morning revenue"] ?? -1,
+    eveningOrders: map["evening orders"] ?? -1,
+    eveningRevenue: map["evening revenue"] ?? -1,
+    totalOrders: map["total orders"] ?? -1,
+    totalRevenue: map["total revenue"] ?? -1
+  };
+  if (columns.name < 0) return;
+
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (isEmptyRow(row)) continue;
+    const excelRow = rowIndex + 1;
+    try {
+      const name = String(row[columns.name] ?? "").trim();
+      if (!name) continue;
+      const code = columns.code >= 0 ? String(row[columns.code] ?? "").trim() : "";
+      const amounts = readFixedTemplateRow(row, columns, fallbackDate);
+      const key = code || normalizeText(name);
+      const existing =
+        peopleMap.get(key) ??
+        {
+          id: createId(),
+          reportDate: amounts.reportDate,
+          brandName: "",
+          salespersonName: name,
+          salespersonCode: code,
+          morningOrders: 0,
+          morningRevenue: 0,
+          eveningOrders: 0,
+          eveningRevenue: 0,
+          totalOrders: 0,
+          totalRevenue: 0,
+          sourceFileId,
+          createdAt: now
+        };
+      existing.morningOrders += amounts.morningOrders;
+      existing.morningRevenue += amounts.morningRevenue;
+      existing.eveningOrders += amounts.eveningOrders;
+      existing.eveningRevenue += amounts.eveningRevenue;
+      existing.totalOrders += amounts.totalOrders;
+      existing.totalRevenue += amounts.totalRevenue;
+      peopleMap.set(key, existing);
+    } catch (error) {
+      errors.push(`Salespeople_Input صف ${excelRow}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+};
+
+const parseFixedPagesSheet = (
+  rows: unknown[][],
+  fallbackDate: string,
+  sourceFileId: string,
+  now: string,
+  platformMap: Map<string, SalesByPlatform>,
+  errors: string[]
+) => {
+  const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
+  if (headerRowIndex < 0) return;
+  const map = buildExactHeaderMap(rows[headerRowIndex]);
+  const columns = {
+    date: map["date"] ?? -1,
+    page: map["platform"] ?? -1,
+    morningOrders: map["morning orders"] ?? -1,
+    morningRevenue: map["morning revenue"] ?? -1,
+    eveningOrders: map["evening orders"] ?? -1,
+    eveningRevenue: map["evening revenue"] ?? -1,
+    totalOrders: map["total orders"] ?? -1,
+    totalRevenue: map["total revenue"] ?? -1
+  };
+  if (columns.page < 0) return;
+
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (isEmptyRow(row)) continue;
+    const excelRow = rowIndex + 1;
+    try {
+      const name = String(row[columns.page] ?? "").trim();
+      if (!name) continue;
+      const amounts = readFixedTemplateRow(row, columns, fallbackDate);
+      const key = normalizeText(name);
+      const existing =
+        platformMap.get(key) ??
+        {
+          id: createId(),
+          reportDate: amounts.reportDate,
+          brandName: "",
+          platformCategory: "",
+          groupType: classifySalesGroup(name, ""),
+          rowType: classifySalesRowType(name),
+          platformName: name,
+          morningOrders: 0,
+          morningRevenue: 0,
+          eveningOrders: 0,
+          eveningRevenue: 0,
+          totalOrders: 0,
+          totalRevenue: 0,
+          sourceFileId,
+          createdAt: now
+        };
+      existing.morningOrders += amounts.morningOrders;
+      existing.morningRevenue += amounts.morningRevenue;
+      existing.eveningOrders += amounts.eveningOrders;
+      existing.eveningRevenue += amounts.eveningRevenue;
+      existing.totalOrders += amounts.totalOrders;
+      existing.totalRevenue += amounts.totalRevenue;
+      platformMap.set(key, existing);
+    } catch (error) {
+      errors.push(`Pages_Input صف ${excelRow}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+};
+
 export const parseSalesWorkbook = async (
   file: File,
   fallbackDate: string,
@@ -304,6 +756,26 @@ export const parseSalesWorkbook = async (
   const errors: string[] = [];
   const debug: WorkbookDebug[] = [];
   const pendingMappings: PendingColumnMapping[] = [];
+
+  const peopleSheetName = findSheetByExactName(workbook, FIXED_PEOPLE_SHEET);
+  const pagesSheetName = findSheetByExactName(workbook, FIXED_PAGES_SHEET);
+
+  if (peopleSheetName || pagesSheetName) {
+    if (peopleSheetName) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[peopleSheetName], { header: 1, defval: null, raw: false });
+      parseFixedPeopleSheet(rows, fallbackDate, sourceFileId, now, peopleMap, errors);
+    }
+    if (pagesSheetName) {
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[pagesSheetName], { header: 1, defval: null, raw: false });
+      parseFixedPagesSheet(rows, fallbackDate, sourceFileId, now, platformMap, errors);
+    }
+    return {
+      people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+      platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+      errors,
+      debug
+    };
+  }
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];

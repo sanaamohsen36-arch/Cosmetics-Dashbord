@@ -4,7 +4,7 @@ import { useState } from "react";
 import { LogIn } from "lucide-react";
 import { signInWithPassword, signOut } from "../../lib/auth";
 
-export function LoginForm({ onSignedIn }: { onSignedIn: () => void }) {
+export function LoginForm({ onSignedIn, errorMessage }: { onSignedIn: () => void; errorMessage?: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -47,7 +47,7 @@ export function LoginForm({ onSignedIn }: { onSignedIn: () => void }) {
           Password
           <input type="password" value={password} autoComplete="current-password" onChange={(event) => setPassword(event.target.value)} required />
         </label>
-        {error && <p className="error-note">{error}</p>}
+        {(error || errorMessage) && <p className="error-note">{error || errorMessage}</p>}
         <button className="primary" type="submit" disabled={loading}>
           {loading ? "..." : "دخول"}
         </button>
