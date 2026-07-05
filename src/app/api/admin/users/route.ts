@@ -57,8 +57,11 @@ export async function POST(request: Request) {
 
     // Invite instead of creating with a password: the new user sets their
     // own password via the emailed link, so no temporary/plaintext password
-    // ever exists on this server or in this UI.
-    const { data: invited, error: inviteError } = await serviceClient.auth.admin.inviteUserByEmail(email);
+    // ever exists on this server or in this UI. redirectTo points the link
+    // at our own Set Password page instead of Supabase's default page - it
+    // must be added to Supabase Auth > URL Configuration > Redirect URLs.
+    const redirectTo = `${new URL(request.url).origin}/auth/set-password`;
+    const { data: invited, error: inviteError } = await serviceClient.auth.admin.inviteUserByEmail(email, { redirectTo });
     if (inviteError) throw new ApiError(400, inviteError.message);
     const userId = invited.user.id;
 
