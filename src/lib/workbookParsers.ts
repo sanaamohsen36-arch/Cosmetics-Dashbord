@@ -1,12 +1,27 @@
 import * as XLSX from "xlsx";
-import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
-import { createId } from "./storage";
+import type { AdsPlatform, AdsRow, ColumnMapping, MappableField, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
+import { createId } from "./supabase";
+import { normalizeArabicText } from "./normalize";
+import { findSavedMapping } from "./mapping-memory/columnMapping";
+import { requestOcrExtraction } from "./ocr/client";
+
+// Surfaced when a sheet's headers don't match a saved mapping or any known
+// alias, so the UI can show the Mapping Wizard instead of failing outright.
+// Carries the raw rows so the wizard-confirm handler can parse just this
+// grid with the user's manual assignment, without re-reading the file.
+export type PendingColumnMapping = {
+  gridLabel: string;
+  headers: string[];
+  rows: unknown[][];
+  headerRowIndex: number;
+};
 
 type ParsedSalesWorkbook = {
   people: SalesBySalesperson[];
   platforms: SalesByPlatform[];
   errors: string[];
   debug: WorkbookDebug[];
+  pendingMapping?: PendingColumnMapping;
 };
 
 type WorkbookDebug = {
@@ -50,10 +65,237 @@ const adAliases = {
   costPerConversion: ["cost per conversion", "cost/conversion"]
 };
 
+// Shared by the Excel/CSV path and the OCR path: both ultimately produce a plain
+// row-major grid of cell text, so column detection, shift/subtotal classification,
+// and numeric validation only need to live once.
+//
+// Column recognition is three-tier, in priority order:
+//   1. A previously-confirmed mapping for this exact header layout (learned
+//      from the Mapping Wizard) - applied directly, no alias guessing.
+//   2. Alias-based automatic detection (detectPeopleColumns/detectPageColumns).
+//   3. Neither matched - hand the raw headers back as a "pending mapping" so
+//      the UI can show the Mapping Wizard instead of silently returning
+//      nothing or hard-failing.
+const processGridIntoMaps = (
+  rows: unknown[][],
+  gridLabel: string,
+  fallbackDate: string,
+  sourceFileId: string,
+  now: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  platformMap: Map<string, SalesByPlatform>,
+  errors: string[],
+  debug: WorkbookDebug[],
+  savedMappings: ColumnMapping[],
+  pendingMappings: PendingColumnMapping[]
+) => {
+  const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
+  if (headerRowIndex < 0) return;
+
+  const headers = rows[headerRowIndex].map((cell) => String(cell ?? "").trim());
+  debug.push({
+    sheetName: gridLabel,
+    headers: headers.map((value, columnIndex) => ({ columnIndex, value })).filter((item) => item.value && !isUnnamed(item.value)),
+    sampleRows: rows.slice(headerRowIndex + 1, headerRowIndex + 7)
+  });
+  console.info("Sales grid inspected", debug[debug.length - 1]);
+
+  const savedMapping = findSavedMapping(savedMappings, headers);
+  if (savedMapping) {
+    applyManualMappingToMaps(rows, headerRowIndex, savedMapping.fields, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors);
+    return;
+  }
+
+  const normalizedHeaders = headers.map(normalizeHeader);
+  const peopleColumns = detectPeopleColumns(normalizedHeaders);
+  const pageColumns = detectPageColumns(normalizedHeaders, peopleColumns?.endIndex ?? -1);
+  const sheetType = detectSheetType(gridLabel, normalizedHeaders);
+
+  // Neither table was recognized in this sheet and there's no learned
+  // mapping for it either - defer to the Mapping Wizard instead of silently
+  // returning nothing (the previous behavior: empty result, zero errors, a
+  // false "Preview ready" with no way to save).
+  if (!peopleColumns && !pageColumns) {
+    pendingMappings.push({ gridLabel, headers, rows, headerRowIndex });
+    return;
+  }
+
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    const excelRow = rowIndex + 1;
+    if (isEmptyRow(row)) continue;
+
+    try {
+      if (peopleColumns && sheetType !== "pages") {
+        readPeopleRow(row, excelRow, peopleColumns, fallbackDate, sourceFileId, now, peopleMap);
+      }
+      if (pageColumns && sheetType !== "people") {
+        readPlatformRow(row, excelRow, pageColumns, fallbackDate, sourceFileId, now, platformMap);
+      }
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+};
+
+// Reads a single row using a manual (wizard-confirmed or learned) field ->
+// column-index mapping, instead of the alias-detected column groups above.
+const readManualMappedRow = (
+  row: unknown[],
+  mapping: Partial<Record<MappableField, number>>,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  platformMap: Map<string, SalesByPlatform>
+) => {
+  const getText = (field: MappableField) => {
+    const index = mapping[field];
+    return index === undefined ? "" : String(row[index] ?? "").trim();
+  };
+  const getNum = (field: MappableField) => {
+    const index = mapping[field];
+    if (index === undefined || !hasValue(row[index])) return 0;
+    // Lenient by design: a manually-mapped grid (OCR output especially) can
+    // contain a stray non-numeric cell - e.g. a second table's own header
+    // row transcribed as if it were data, when two tables share one column
+    // layout. Treat it as 0 instead of rejecting the whole row; the
+    // editable preview is exactly where the user reviews/corrects it,
+    // rather than the row silently vanishing or the whole upload failing.
+    try {
+      return toNumber(row[index]);
+    } catch {
+      return 0;
+    }
+  };
+  // If the file splits morning/evening into their own columns, use those
+  // directly; otherwise treat a single Orders/Revenue pair as one unsplit
+  // bucket (kept under "morning" by convention so totals still add up).
+  const morningOrders = mapping.morningOrders !== undefined ? getNum("morningOrders") : getNum("orders");
+  const morningRevenue = mapping.morningRevenue !== undefined ? getNum("morningRevenue") : getNum("revenue");
+  const eveningOrders = mapping.eveningOrders !== undefined ? getNum("eveningOrders") : 0;
+  const eveningRevenue = mapping.eveningRevenue !== undefined ? getNum("eveningRevenue") : 0;
+
+  const name = getText("salespersonName");
+  const code = getText("salespersonCode");
+  // Some real reports transcribe into a single grid that stacks a
+  // salespeople table and a totals/pages table sharing the same "name"
+  // column position. When a code column is configured, a name without a
+  // code is not a real salesperson row - it's a subtotal/grand-total/page
+  // row - so treat it as page data instead rather than miscounting it as
+  // a salesperson.
+  const codeConfigured = mapping.salespersonCode !== undefined;
+  const isPerson = Boolean(name) && (!codeConfigured || Boolean(code));
+
+  if (isPerson) {
+    const key = code || name;
+    const existing =
+      peopleMap.get(key) ??
+      {
+        id: createId(),
+        reportDate: fallbackDate,
+        brandName: "",
+        salespersonName: name,
+        salespersonCode: code,
+        morningOrders: 0,
+        morningRevenue: 0,
+        eveningOrders: 0,
+        eveningRevenue: 0,
+        totalOrders: 0,
+        totalRevenue: 0,
+        sourceFileId,
+        createdAt
+      };
+    existing.morningOrders += morningOrders;
+    existing.morningRevenue += morningRevenue;
+    existing.eveningOrders += eveningOrders;
+    existing.eveningRevenue += eveningRevenue;
+    existing.totalOrders = existing.morningOrders + existing.eveningOrders;
+    existing.totalRevenue = existing.morningRevenue + existing.eveningRevenue;
+    peopleMap.set(key, existing);
+  }
+
+  const pageName = mapping.pageName !== undefined ? getText("pageName") : !isPerson ? name : "";
+  if (pageName) {
+    const category = getText("platform");
+    const existing =
+      platformMap.get(pageName) ??
+      {
+        id: createId(),
+        reportDate: fallbackDate,
+        brandName: "",
+        platformCategory: category,
+        groupType: classifySalesGroup(pageName, category),
+        rowType: classifySalesRowType(pageName),
+        platformName: pageName,
+        morningOrders: 0,
+        morningRevenue: 0,
+        eveningOrders: 0,
+        eveningRevenue: 0,
+        totalOrders: 0,
+        totalRevenue: 0,
+        sourceFileId,
+        createdAt
+      };
+    existing.morningOrders += morningOrders;
+    existing.morningRevenue += morningRevenue;
+    existing.eveningOrders += eveningOrders;
+    existing.eveningRevenue += eveningRevenue;
+    existing.totalOrders = existing.morningOrders + existing.eveningOrders;
+    existing.totalRevenue = existing.morningRevenue + existing.eveningRevenue;
+    platformMap.set(pageName, existing);
+  }
+};
+
+const applyManualMappingToMaps = (
+  rows: unknown[][],
+  headerRowIndex: number,
+  mapping: Partial<Record<MappableField, number>>,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  platformMap: Map<string, SalesByPlatform>,
+  errors: string[]
+) => {
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (isEmptyRow(row)) continue;
+    try {
+      readManualMappedRow(row, mapping, fallbackDate, sourceFileId, createdAt, peopleMap, platformMap);
+    } catch (error) {
+      errors.push(`صف ${rowIndex + 1}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+};
+
+// Called by the UI once the user confirms the Mapping Wizard for a specific
+// pending grid. Produces the same shape as the alias-detected path so the
+// preview/save flow downstream doesn't need to know which path was used.
+export const applyManualColumnMapping = (
+  rows: unknown[][],
+  headerRowIndex: number,
+  mapping: Partial<Record<MappableField, number>>,
+  fallbackDate: string,
+  sourceFileId: string
+): { people: SalesBySalesperson[]; platforms: SalesByPlatform[]; errors: string[] } => {
+  const now = new Date().toISOString();
+  const peopleMap = new Map<string, SalesBySalesperson>();
+  const platformMap = new Map<string, SalesByPlatform>();
+  const errors: string[] = [];
+  applyManualMappingToMaps(rows, headerRowIndex, mapping, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors);
+  return {
+    people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    errors
+  };
+};
+
 export const parseSalesWorkbook = async (
   file: File,
   fallbackDate: string,
-  sourceFileId: string
+  sourceFileId: string,
+  savedMappings: ColumnMapping[] = []
 ): Promise<ParsedSalesWorkbook> => {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
   const now = new Date().toISOString();
@@ -61,50 +303,79 @@ export const parseSalesWorkbook = async (
   const platformMap = new Map<string, SalesByPlatform>();
   const errors: string[] = [];
   const debug: WorkbookDebug[] = [];
+  const pendingMappings: PendingColumnMapping[] = [];
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
-    const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
-    if (headerRowIndex < 0) continue;
-
-    const headers = rows[headerRowIndex].map((cell) => String(cell ?? "").trim());
-    debug.push({
-      sheetName,
-      headers: headers.map((value, columnIndex) => ({ columnIndex, value })).filter((item) => item.value && !isUnnamed(item.value)),
-      sampleRows: rows.slice(headerRowIndex + 1, headerRowIndex + 7)
-    });
-    console.info("Sales workbook inspected", debug[debug.length - 1]);
-
-    const normalizedHeaders = headers.map(normalizeHeader);
-    const peopleColumns = detectPeopleColumns(normalizedHeaders);
-    const pageColumns = detectPageColumns(normalizedHeaders, peopleColumns?.endIndex ?? -1);
-    const sheetType = detectSheetType(sheetName, normalizedHeaders);
-
-    for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
-      const row = rows[rowIndex];
-      const excelRow = rowIndex + 1;
-      if (isEmptyRow(row)) continue;
-
-      try {
-        if (peopleColumns && sheetType !== "pages") {
-          readPeopleRow(row, excelRow, peopleColumns, fallbackDate, sourceFileId, now, peopleMap);
-        }
-        if (pageColumns && sheetType !== "people") {
-          readPlatformRow(row, excelRow, pageColumns, fallbackDate, sourceFileId, now, platformMap);
-        }
-      } catch (error) {
-        errors.push(error instanceof Error ? error.message : String(error));
-      }
-    }
+    processGridIntoMaps(rows, sheetName, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug, savedMappings, pendingMappings);
   }
 
   return {
     people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
     platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
     errors,
-    debug
+    debug,
+    pendingMapping: pendingMappings[0]
   };
+};
+
+// Entry point for any non-spreadsheet source (OCR, future manual paste, etc.) that
+// has already been reduced to a row-major grid of cell text. Runs the exact same
+// column detection and validation as the Excel/CSV path.
+export const parseSalesGrid = (
+  rows: unknown[][],
+  fallbackDate: string,
+  sourceFileId: string,
+  gridLabel = "ocr",
+  savedMappings: ColumnMapping[] = []
+): ParsedSalesWorkbook => parseSalesGrids([{ label: gridLabel, rows }], fallbackDate, sourceFileId, savedMappings);
+
+// Multi-grid entry point: each grid is processed independently (own header
+// row, own column detection/mapping), then merged - the same pattern
+// parseSalesWorkbook already uses across multiple Excel sheets. Needed
+// because OCR can return more than one visually distinct table per image
+// (e.g. a salespeople table and a separate pages/platforms table), and
+// those tables commonly have different column layouts - flattening them
+// into one grid under one header row causes column misalignment.
+export const parseSalesGrids = (
+  grids: Array<{ label: string; rows: unknown[][] }>,
+  fallbackDate: string,
+  sourceFileId: string,
+  savedMappings: ColumnMapping[] = []
+): ParsedSalesWorkbook => {
+  const now = new Date().toISOString();
+  const peopleMap = new Map<string, SalesBySalesperson>();
+  const platformMap = new Map<string, SalesByPlatform>();
+  const errors: string[] = [];
+  const debug: WorkbookDebug[] = [];
+  const pendingMappings: PendingColumnMapping[] = [];
+
+  for (const grid of grids) {
+    processGridIntoMaps(grid.rows, grid.label, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug, savedMappings, pendingMappings);
+  }
+
+  return {
+    people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    errors,
+    debug,
+    pendingMapping: pendingMappings[0]
+  };
+};
+
+export const parseSalesImage = async (
+  file: File,
+  fallbackDate: string,
+  sourceFileId: string,
+  savedMappings: ColumnMapping[] = []
+): Promise<ParsedSalesWorkbook> => {
+  const extraction = await requestOcrExtraction(file, fallbackDate);
+  if (extraction.warnings.length) {
+    console.warn("Sales OCR warnings", extraction.providerId, extraction.warnings);
+  }
+  const grids = extraction.tables.map((rows, index) => ({ label: `ocr:${extraction.providerId}:${index + 1}`, rows }));
+  return parseSalesGrids(grids, fallbackDate, sourceFileId, savedMappings);
 };
 
 export const parseAdsWorkbook = async (
@@ -230,6 +501,7 @@ const readPeopleRow = (
     {
       id: createId(),
       reportDate: normalizeExcelDate(row[columns.date]) || fallbackDate,
+      brandName: "",
       salespersonName: name,
       salespersonCode: code,
       morningOrders: 0,
@@ -277,6 +549,7 @@ const readPlatformRow = (
     {
       id: createId(),
       reportDate: normalizeExcelDate(row[columns.date]) || fallbackDate,
+      brandName: "",
       platformCategory: category,
       groupType,
       rowType,
@@ -309,9 +582,11 @@ const readPlatformRow = (
 };
 
 const detectSheetType = (sheetName: string, headers: string[]) => {
+  // text has already been through normalizeText(), which folds ة -> ه, so the
+  // literals below must match the post-normalization spelling ("الصفحه").
   const text = normalizeText(`${sheetName} ${headers.join(" ")}`);
-  if (/pages_sales|page_platform|platform_name|الصفحة|البلاتفورم/.test(text) && !/السيلز|salesperson/.test(text)) return "pages";
-  if (/salespeople_sales|salesperson|السيلز/.test(text) && !/الصفحة|platform/.test(text)) return "people";
+  if (/pages_sales|page_platform|platform_name|الصفحه|البلاتفورم/.test(text) && !/السيلز|salesperson/.test(text)) return "pages";
+  if (/salespeople_sales|salesperson|السيلز/.test(text) && !/الصفحه|platform/.test(text)) return "people";
   return "mixed";
 };
 
@@ -395,14 +670,9 @@ const normalizeExcelDate = (value: unknown): string => {
   return "";
 };
 
-const normalizeHeader = (value: unknown) =>
-  String(value ?? "")
-    .replace(/[إأآ]/g, "ا")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+const normalizeHeader = (value: unknown) => normalizeArabicText(value);
 
-const normalizeText = (value: string) => normalizeHeader(value);
+const normalizeText = (value: string) => normalizeArabicText(value);
 const hasValue = (value: unknown) => String(value ?? "").trim() !== "";
 const isEmptyRow = (row: unknown[]) => row.every((cell) => !hasValue(cell));
 const isUnnamed = (value: string) => /^unnamed|^__empty|^null$|^undefined$/i.test(value.trim());

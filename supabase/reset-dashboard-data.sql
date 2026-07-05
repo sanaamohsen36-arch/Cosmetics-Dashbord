@@ -17,6 +17,10 @@ truncate table if exists public.pages_sales restart identity cascade;
 truncate table if exists public.salespeople_sales restart identity cascade;
 truncate table if exists public.sales_files restart identity cascade;
 
--- Legacy OCR learning data is no longer used by the rebuilt upload flow.
-truncate table public.ocr_page_corrections restart identity cascade;
-truncate table public.ocr_salesperson_corrections restart identity cascade;
+-- Mapping memory (OCR/name corrections and the column-mapping wizard's
+-- learned layouts) is learned configuration, not operational sales/ads
+-- data - intentionally NOT truncated here. Wiping it on every reset would
+-- destroy corrections and column mappings that have nothing to do with a
+-- clean re-upload. Truncate ocr_page_corrections / ocr_salesperson_corrections
+-- / column_mappings manually only if you actually want to forget everything
+-- the app has learned.

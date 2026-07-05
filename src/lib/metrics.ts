@@ -1,20 +1,15 @@
 import type { AdsRow, AppData, DateRange, Kpis, SalesByPlatform, SalesBySalesperson } from "../types";
+import { normalizeArabicText } from "./normalize";
 
 export const inRange = (date: string, range: DateRange) => date >= range.from && date <= range.to;
 
 const sum = <T,>(rows: T[], picker: (row: T) => number) => rows.reduce((total, row) => total + picker(row), 0);
 const safeRatio = (top: number, bottom: number) => (bottom ? top / bottom : null);
 const safePercent = (top: number, bottom: number) => (bottom ? (top / bottom) * 100 : null);
-const normalizePlatformName = (name: string) =>
-  name
-    .replace(/[إأآ]/g, "ا")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
 
 export const isSubtotalPlatformName = (name: string) => {
-  const normalized = normalizePlatformName(name);
-  return normalized === "اجمالي السوشيال" || normalized === "اجمالي اليوم";
+  const normalized = normalizeArabicText(name);
+  return normalized === "اجمالي السوشيال" || normalized === "اجمالي المتابعه" || normalized === "اجمالي اليوم" || normalized.includes("اجمالي");
 };
 
 export const getAllAdsRows = (data: AppData) => [...data.metaAds, ...data.tiktokAds];
@@ -23,7 +18,7 @@ export const filterPeople = (data: AppData, range: DateRange) =>
   data.salesBySalesperson.filter((row) => inRange(row.reportDate, range));
 
 export const filterPlatforms = (data: AppData, range: DateRange) =>
-  data.salesByPlatform.filter((row) => inRange(row.reportDate, range) && !isSubtotalPlatformName(row.platformName));
+  data.salesByPlatform.filter((row) => inRange(row.reportDate, range) && row.rowType !== "subtotal" && row.rowType !== "grand_total" && !isSubtotalPlatformName(row.platformName));
 
 export const filterAds = (data: AppData, range: DateRange) => getAllAdsRows(data).filter((row) => inRange(row.reportDate, range));
 
@@ -72,7 +67,10 @@ export const calculateKpis = (data: AppData, range: DateRange): Kpis => {
 export const aggregatePeople = (rows: SalesBySalesperson[]) => {
   const map = new Map<string, SalesBySalesperson>();
   for (const row of rows) {
-    const key = `${row.salespersonCode}-${row.salespersonName}`;
+    // Normalized so the same person typed with a stray space or a different
+    // Arabic letter variant across different days' uploads merges into one
+    // row instead of fragmenting the totals.
+    const key = `${normalizeArabicText(row.salespersonCode)}-${normalizeArabicText(row.salespersonName)}`;
     const existing = map.get(key);
     if (!existing) {
       map.set(key, { ...row });
@@ -90,8 +88,8 @@ export const aggregatePeople = (rows: SalesBySalesperson[]) => {
 
 export const aggregatePlatforms = (rows: SalesByPlatform[]) => {
   const map = new Map<string, SalesByPlatform>();
-  for (const row of rows.filter((item) => !isSubtotalPlatformName(item.platformName))) {
-    const key = row.platformName;
+  for (const row of rows.filter((item) => item.rowType !== "subtotal" && item.rowType !== "grand_total" && !isSubtotalPlatformName(item.platformName))) {
+    const key = normalizeArabicText(row.platformName);
     const existing = map.get(key);
     if (!existing) {
       map.set(key, { ...row });
@@ -105,6 +103,20 @@ export const aggregatePlatforms = (rows: SalesByPlatform[]) => {
     }
   }
   return [...map.values()].sort((a, b) => b.totalRevenue - a.totalRevenue);
+};
+
+export const aggregateAdsByPlatform = (rows: AdsRow[]) => {
+  const map = new Map<string, { platform: string; spend: number; messages: number; comments: number; results: number }>();
+  for (const row of rows) {
+    const platform = row.adAccountName || row.adsPlatform;
+    const item = map.get(platform) ?? { platform, spend: 0, messages: 0, comments: 0, results: 0 };
+    item.spend += row.spend;
+    item.messages += Number(row.messagesCount) || 0;
+    item.comments += Number(row.commentsCount) || 0;
+    item.results += Number(row.resultsCount) || row.leads || row.purchases || 0;
+    map.set(platform, item);
+  }
+  return [...map.values()].sort((a, b) => b.spend - a.spend);
 };
 
 export const aggregateAdsByDate = (ads: AdsRow[]) => {

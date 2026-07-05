@@ -3,6 +3,9 @@ import type {
   AdsRawFile,
   AdsRow,
   AppData,
+  BrandMaster,
+  ColumnMapping,
+  MappableField,
   OcrPageCorrection,
   OcrSalespersonCorrection,
   PlatformMaster,
@@ -12,9 +15,33 @@ import type {
   SalespersonMaster,
   SalesRawFile,
   UploadMode
-} from "../types";
-import { isSubtotalPlatformName } from "./metrics";
-import { isSupabaseConfigured, supabase } from "./supabase";
+} from "../../types";
+import type { AppNotification, AuditLogEntry, BackupRun, Profile, SystemHealthStatus } from "../../types";
+import { isSubtotalPlatformName } from "../metrics";
+import { brandOptions } from "../constants";
+import { isSupabaseConfigured, supabase } from "./client";
+import { getCurrentProfile } from "../auth";
+import { logAction } from "../audit";
+import { reportHealth } from "../health";
+
+// Best-effort audit/health wiring shared by every write path below. Never
+// throws - a logging failure must not block the save/delete it describes.
+// No-ops in local-fallback mode (getCurrentProfile returns null with no
+// Supabase session) same as every other Supabase-only feature here.
+const recordWrite = async (
+  action: string,
+  entityType: string,
+  component: string,
+  options?: { entityId?: string; previousValue?: unknown; newValue?: unknown }
+) => {
+  try {
+    const profile = await getCurrentProfile();
+    await logAction(profile?.id ?? null, profile?.role ?? null, action, entityType, options);
+    await reportHealth(component, "ok");
+  } catch (error) {
+    await reportHealth(component, "down", error instanceof Error ? error.message : String(error)).catch(() => undefined);
+  }
+};
 
 const STORAGE_KEY = "daily-report-dashboard-v1";
 
@@ -59,7 +86,14 @@ export const emptyData = (): AppData => ({
     name,
     aliases: [name],
     active: true
-  }))
+  })),
+  columnMappings: [],
+  brands: brandOptions.map((name) => ({ id: createId(), name, active: true })),
+  profiles: [],
+  auditLog: [],
+  backupRuns: [],
+  systemHealth: [],
+  notifications: []
 });
 
 export const getStorageMode = () => (isSupabaseConfigured ? "Supabase" : "Local fallback");
@@ -91,6 +125,14 @@ const mergeDefaultPlatformMasters = (platforms: PlatformMaster[] = []) => {
   return [...platforms, ...missing];
 };
 
+const mergeDefaultBrands = (brands: BrandMaster[] = []) => {
+  const seen = new Set(brands.map((item) => item.name.trim().toLowerCase()));
+  const missing = brandOptions
+    .filter((name) => !seen.has(name.trim().toLowerCase()))
+    .map((name) => ({ id: createId(), name, active: true }));
+  return [...brands, ...missing];
+};
+
 export const loadData = async (): Promise<AppData> => {
   if (!supabase) return loadLocalData();
 
@@ -106,7 +148,14 @@ export const loadData = async (): Promise<AppData> => {
     ocrPageCorrections,
     ocrSalespersonCorrections,
     salespeople,
-    platforms
+    platforms,
+    brands,
+    columnMappings,
+    profiles,
+    auditLog,
+    backupRuns,
+    systemHealth,
+    notifications
   ] = await Promise.all([
     selectAll("sales_raw_files"),
     selectAll("sales_by_salesperson"),
@@ -118,21 +167,42 @@ export const loadData = async (): Promise<AppData> => {
     selectOptionalAll("ocr_page_corrections"),
     selectOptionalAll("ocr_salesperson_corrections"),
     selectOptionalAll("salespeople"),
-    selectOptionalAll("platforms")
+    selectOptionalAll("platforms"),
+    selectOptionalAll("brands"),
+    selectOptionalAll("column_mappings"),
+    selectOptionalAll("profiles"),
+    selectOptionalAll("audit_log"),
+    selectOptionalAll("backup_runs"),
+    selectOptionalAll("system_health_status"),
+    selectOptionalAll("notifications")
   ]);
 
+  // Section 15: only current file versions and the rows tied to them are
+  // loaded into the app's working data - superseded versions stay in the
+  // database (inspectable, purge-only) but are never double-counted in
+  // aggregation/reporting.
+  const currentSalesFileIds = new Set(salesRawFiles.filter((row) => row.is_current !== false).map((row) => row.id));
+  const currentAdsFileIds = new Set(adsRawFiles.filter((row) => row.is_current !== false).map((row) => row.id));
+
   return {
-    salesRawFiles: salesRawFiles.map(fromSalesRawFile),
-    salesBySalesperson: salesBySalesperson.map(fromSalesperson),
-    salesByPlatform: salesByPlatform.map(fromPlatformSales),
-    adsRawFiles: adsRawFiles.map(fromAdsRawFile),
-    metaAds: metaAds.map((row) => fromAdsRow(row, "Meta")),
-    tiktokAds: tiktokAds.map((row) => fromAdsRow(row, "TikTok")),
+    salesRawFiles: salesRawFiles.filter((row) => row.is_current !== false).map(fromSalesRawFile),
+    salesBySalesperson: salesBySalesperson.filter((row) => currentSalesFileIds.has(row.source_file_id)).map(fromSalesperson),
+    salesByPlatform: salesByPlatform.filter((row) => currentSalesFileIds.has(row.source_file_id)).map(fromPlatformSales),
+    adsRawFiles: adsRawFiles.filter((row) => row.is_current !== false).map(fromAdsRawFile),
+    metaAds: metaAds.filter((row) => currentAdsFileIds.has(row.source_file_id)).map((row) => fromAdsRow(row, "Meta")),
+    tiktokAds: tiktokAds.filter((row) => currentAdsFileIds.has(row.source_file_id)).map((row) => fromAdsRow(row, "TikTok")),
     platformSettings: mergeDefaultPlatforms(platformSettings.map(fromPlatformSetting)),
     ocrPageCorrections: ocrPageCorrections.map(fromOcrPageCorrection),
     ocrSalespersonCorrections: ocrSalespersonCorrections.map(fromOcrSalespersonCorrection),
     salespeople: salespeople.map(fromSalespersonMaster),
-    platforms: mergeDefaultPlatformMasters(platforms.map(fromPlatformMaster))
+    platforms: mergeDefaultPlatformMasters(platforms.map(fromPlatformMaster)),
+    brands: mergeDefaultBrands(brands.map(fromBrandMaster)),
+    columnMappings: columnMappings.map(fromColumnMapping),
+    profiles: profiles.map(fromProfileRow),
+    auditLog: auditLog.map(fromAuditLogRow),
+    backupRuns: backupRuns.map(fromBackupRunRow),
+    systemHealth: systemHealth.map(fromSystemHealthRow),
+    notifications: notifications.map(fromNotificationRow)
   };
 };
 
@@ -154,7 +224,148 @@ export const saveData = async (data: AppData) => {
   await insertOptionalRows("ocr_salesperson_corrections", data.ocrSalespersonCorrections.map(toOcrSalespersonCorrectionRow));
   await insertOptionalRows("salespeople", data.salespeople.map(toSalespersonMasterRow));
   await insertOptionalRows("platforms", data.platforms.map(toPlatformMasterRow));
+  await insertOptionalRows("brands", data.brands.map(toBrandMasterRow));
+  await insertOptionalRows("column_mappings", data.columnMappings.map(toColumnMappingRow));
   await refreshDailySummary(data);
+};
+
+// Additive-only persistence for salesperson/platform names newly discovered while
+// parsing an upload. Unlike saveData(), this never touches unrelated tables, so it
+// is safe to call after a targeted upload/delete without risking other users' data.
+export const saveMasterDataAdditions = async (
+  newPlatformSettings: PlatformSetting[],
+  newSalespeople: SalespersonMaster[],
+  newPlatforms: PlatformMaster[]
+) => {
+  if (!supabase) return;
+  await insertRows("platform_settings", newPlatformSettings.map(toPlatformSettingRow));
+  await insertOptionalRows("salespeople", newSalespeople.map(toSalespersonMasterRow));
+  await insertOptionalRows("platforms", newPlatforms.map(toPlatformMasterRow));
+};
+
+// Mapping memory: remembers a user's manual correction of a parsed
+// salesperson/page name so future uploads apply it automatically instead of
+// asking the user to fix the same OCR/typo mistake every time. Repeated
+// corrections of the same wrong value bump usage_count on the existing row
+// instead of inserting a duplicate - additive/targeted only, no full-table
+// writes.
+export const recordSalespersonCorrection = async (
+  data: AppData,
+  wrongValue: string,
+  correctValue: string,
+  salespersonCode: string
+): Promise<AppData> => {
+  const existing = data.ocrSalespersonCorrections.find(
+    (item) => item.wrongValue === wrongValue && item.salespersonCode === salespersonCode
+  );
+  const now = new Date().toISOString();
+
+  if (existing) {
+    const updated: OcrSalespersonCorrection = { ...existing, correctValue, usageCount: existing.usageCount + 1 };
+    const next = {
+      ...data,
+      ocrSalespersonCorrections: data.ocrSalespersonCorrections.map((item) => (item.id === existing.id ? updated : item))
+    };
+    if (!supabase) {
+      saveLocalData(next);
+      return next;
+    }
+    const { error } = await supabase
+      .from("ocr_salesperson_corrections")
+      .update({ correct_value: updated.correctValue, usage_count: updated.usageCount })
+      .eq("id", existing.id);
+    if (error && !isMissingTableError(error)) throw error;
+    return next;
+  }
+
+  const created: OcrSalespersonCorrection = {
+    id: createId(),
+    wrongValue,
+    correctValue,
+    salespersonCode,
+    createdAt: now,
+    usageCount: 1
+  };
+  const next = { ...data, ocrSalespersonCorrections: [...data.ocrSalespersonCorrections, created] };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await insertOptionalRows("ocr_salesperson_corrections", [toOcrSalespersonCorrectionRow(created)]);
+  return next;
+};
+
+export const recordPageCorrection = async (data: AppData, wrongValue: string, correctValue: string): Promise<AppData> => {
+  const existing = data.ocrPageCorrections.find((item) => item.wrongValue === wrongValue);
+  const now = new Date().toISOString();
+
+  if (existing) {
+    const updated: OcrPageCorrection = { ...existing, correctValue, usageCount: existing.usageCount + 1 };
+    const next = {
+      ...data,
+      ocrPageCorrections: data.ocrPageCorrections.map((item) => (item.id === existing.id ? updated : item))
+    };
+    if (!supabase) {
+      saveLocalData(next);
+      return next;
+    }
+    const { error } = await supabase
+      .from("ocr_page_corrections")
+      .update({ correct_value: updated.correctValue, usage_count: updated.usageCount })
+      .eq("id", existing.id);
+    if (error && !isMissingTableError(error)) throw error;
+    return next;
+  }
+
+  const created: OcrPageCorrection = { id: createId(), wrongValue, correctValue, createdAt: now, usageCount: 1 };
+  const next = { ...data, ocrPageCorrections: [...data.ocrPageCorrections, created] };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await insertOptionalRows("ocr_page_corrections", [toOcrPageCorrectionRow(created)]);
+  return next;
+};
+
+// Column-mapping wizard memory: remembers a user-confirmed column layout
+// (keyed by header signature) so the same file structure is recognized
+// automatically next time instead of asking again. Additive/targeted only,
+// same pattern as the OCR corrections above.
+export const recordColumnMapping = async (
+  data: AppData,
+  signature: string,
+  fields: Partial<Record<MappableField, number>>,
+  sheetLabel: string
+): Promise<AppData> => {
+  const existing = data.columnMappings.find((item) => item.signature === signature);
+  const now = new Date().toISOString();
+
+  if (existing) {
+    const updated: ColumnMapping = { ...existing, fields, usageCount: existing.usageCount + 1 };
+    const next = {
+      ...data,
+      columnMappings: data.columnMappings.map((item) => (item.id === existing.id ? updated : item))
+    };
+    if (!supabase) {
+      saveLocalData(next);
+      return next;
+    }
+    const { error } = await supabase
+      .from("column_mappings")
+      .update({ mapping: updated.fields, usage_count: updated.usageCount })
+      .eq("id", existing.id);
+    if (error && !isMissingTableError(error)) throw error;
+    return next;
+  }
+
+  const created: ColumnMapping = { id: createId(), signature, fields, sheetLabel, createdAt: now, usageCount: 1 };
+  const next = { ...data, columnMappings: [...data.columnMappings, created] };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await insertOptionalRows("column_mappings", [toColumnMappingRow(created)]);
+  return next;
 };
 
 export const subscribeToDataChanges = (onChange: () => void) => {
@@ -176,6 +387,8 @@ export const subscribeToDataChanges = (onChange: () => void) => {
     .on("postgres_changes", { event: "*", schema: "public", table: "ocr_salesperson_corrections" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "salespeople" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "platforms" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "brands" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "column_mappings" }, onChange)
     .subscribe();
 
   return () => {
@@ -191,6 +404,9 @@ const loadLocalData = (): AppData => {
     return {
       ...emptyData(),
       ...parsed,
+      salesRawFiles: (parsed.salesRawFiles ?? []).map((file) => ({ ...file, brandName: file.brandName || "غير محدد" })),
+      salesBySalesperson: (parsed.salesBySalesperson ?? []).map((row) => ({ ...row, brandName: row.brandName || "غير محدد" })),
+      salesByPlatform: (parsed.salesByPlatform ?? []).map((row) => ({ ...row, brandName: row.brandName || "غير محدد" })),
       adsRawFiles: (parsed.adsRawFiles ?? []).map((file) => ({
         ...file,
         salesPlatformName: file.salesPlatformName || "غير محدد",
@@ -204,7 +420,14 @@ const loadLocalData = (): AppData => {
       ocrPageCorrections: parsed.ocrPageCorrections ?? [],
       ocrSalespersonCorrections: parsed.ocrSalespersonCorrections ?? [],
       salespeople: parsed.salespeople ?? [],
-      platforms: mergeDefaultPlatformMasters(parsed.platforms ?? [])
+      platforms: mergeDefaultPlatformMasters(parsed.platforms ?? []),
+      brands: mergeDefaultBrands(parsed.brands ?? []),
+      columnMappings: parsed.columnMappings ?? [],
+      profiles: parsed.profiles ?? [],
+      auditLog: parsed.auditLog ?? [],
+      backupRuns: parsed.backupRuns ?? [],
+      systemHealth: parsed.systemHealth ?? [],
+      notifications: parsed.notifications ?? []
     };
   } catch {
     return emptyData();
@@ -292,6 +515,8 @@ const deleteAllTables = async () => {
   await deleteOptionalAll("ocr_salesperson_corrections");
   await deleteOptionalAll("salespeople");
   await deleteOptionalAll("platforms");
+  await deleteOptionalAll("brands");
+  await deleteOptionalAll("column_mappings");
 };
 
 const refreshDailySummary = async (data: AppData) => {
@@ -341,6 +566,11 @@ const ensureDefaultPlatforms = async () => {
   await insertRows("platform_settings", missing.map(toPlatformSettingRow));
 };
 
+// Section 15 (File Versioning): "replace" no longer deletes anything. The
+// previous current file (and its rows) stays in the database, marked
+// superseded; the new upload is inserted as the next version. Aggregation
+// (loadData below) only ever reads is_current rows, so superseded versions
+// are never double-counted, but they remain inspectable.
 export const saveSalesUpload = async (
   current: AppData,
   rawFile: SalesRawFile,
@@ -349,21 +579,39 @@ export const saveSalesUpload = async (
   mode: UploadMode
 ): Promise<AppData> => {
   if (mode === "cancel") return current;
-  const withoutDate =
+  // One upload = one brand (docs/ARCHITECTURE.md section 19): a day+brand
+  // pair is one versioned slot, same as Ads' day+platform+brand+account slot.
+  const matchesSlot = (file: SalesRawFile) => file.reportDate === rawFile.reportDate && file.brandName === rawFile.brandName;
+  const previousFile = current.salesRawFiles.find((file) => matchesSlot(file) && file.isCurrent);
+  const versionedFile: SalesRawFile = {
+    ...rawFile,
+    version: mode === "replace" && previousFile ? previousFile.version + 1 : 1,
+    isCurrent: true
+  };
+
+  const withoutCurrent =
     mode === "replace"
       ? {
           ...current,
-          salesRawFiles: current.salesRawFiles.filter((file) => file.reportDate !== rawFile.reportDate),
-          salesBySalesperson: current.salesBySalesperson.filter((row) => row.reportDate !== rawFile.reportDate),
-          salesByPlatform: current.salesByPlatform.filter((row) => row.reportDate !== rawFile.reportDate)
+          salesRawFiles: current.salesRawFiles.map((file) =>
+            matchesSlot(file) && file.isCurrent
+              ? { ...file, isCurrent: false, supersededAt: rawFile.createdAt, supersededBy: versionedFile.id }
+              : file
+          ),
+          salesBySalesperson: current.salesBySalesperson.filter(
+            (row) => !(row.reportDate === rawFile.reportDate && row.brandName === rawFile.brandName)
+          ),
+          salesByPlatform: current.salesByPlatform.filter(
+            (row) => !(row.reportDate === rawFile.reportDate && row.brandName === rawFile.brandName)
+          )
         }
       : current;
 
   const next = {
-    ...withoutDate,
-    salesRawFiles: [...withoutDate.salesRawFiles, rawFile],
-    salesBySalesperson: [...withoutDate.salesBySalesperson, ...people],
-    salesByPlatform: [...withoutDate.salesByPlatform, ...platforms]
+    ...withoutCurrent,
+    salesRawFiles: [...withoutCurrent.salesRawFiles, versionedFile],
+    salesBySalesperson: [...withoutCurrent.salesBySalesperson, ...people],
+    salesByPlatform: [...withoutCurrent.salesByPlatform, ...platforms]
   };
 
   if (!supabase) {
@@ -371,14 +619,17 @@ export const saveSalesUpload = async (
     return next;
   }
 
-  if (mode === "replace") {
-    await deleteWhere("sales_raw_files", (query) => query.eq("report_date", rawFile.reportDate));
-    await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", rawFile.reportDate));
-    await deleteWhere("sales_by_platform", (query) => query.eq("report_date", rawFile.reportDate));
+  if (mode === "replace" && previousFile) {
+    await supersedeSalesRawFile(previousFile.id, versionedFile.id);
   }
-  await insertRows("sales_raw_files", [toSalesRawFileRow(rawFile)]);
+  await insertRows("sales_raw_files", [toSalesRawFileRow(versionedFile)]);
   await insertRows("sales_by_salesperson", people.map(toSalespersonRow));
   await insertRows("sales_by_platform", platforms.map(toPlatformSalesRow));
+  await recordWrite(mode, "sales_raw_file", "sales_upload", {
+    entityId: versionedFile.id,
+    previousValue: previousFile?.id,
+    newValue: { fileName: versionedFile.fileName, reportDate: versionedFile.reportDate, version: versionedFile.version }
+  });
   return next;
 };
 
@@ -391,18 +642,26 @@ export const saveAdsUpload = async (
 ): Promise<AppData> => {
   if (mode === "cancel") return current;
   const tableKey = platform === "Meta" ? "metaAds" : "tiktokAds";
-  const withoutDate =
+  const matchesSlot = (file: AdsRawFile) =>
+    file.reportDate === rawFile.reportDate &&
+    file.adsPlatform === platform &&
+    file.salesPlatformName === rawFile.salesPlatformName &&
+    (file.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد");
+  const previousFile = current.adsRawFiles.find((file) => matchesSlot(file) && file.isCurrent);
+  const versionedFile: AdsRawFile = {
+    ...rawFile,
+    version: mode === "replace" && previousFile ? previousFile.version + 1 : 1,
+    isCurrent: true
+  };
+
+  const withoutCurrent =
     mode === "replace"
       ? {
           ...current,
-          adsRawFiles: current.adsRawFiles.filter(
-            (file) =>
-              !(
-                file.reportDate === rawFile.reportDate &&
-                file.adsPlatform === platform &&
-                file.salesPlatformName === rawFile.salesPlatformName &&
-                (file.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
-              )
+          adsRawFiles: current.adsRawFiles.map((file) =>
+            matchesSlot(file) && file.isCurrent
+              ? { ...file, isCurrent: false, supersededAt: rawFile.createdAt, supersededBy: versionedFile.id }
+              : file
           ),
           [tableKey]: current[tableKey].filter(
             (row) =>
@@ -416,9 +675,9 @@ export const saveAdsUpload = async (
       : current;
 
   const next = {
-    ...withoutDate,
-    adsRawFiles: [...withoutDate.adsRawFiles, rawFile],
-    [tableKey]: [...withoutDate[tableKey], ...rows]
+    ...withoutCurrent,
+    adsRawFiles: [...withoutCurrent.adsRawFiles, versionedFile],
+    [tableKey]: [...withoutCurrent[tableKey], ...rows]
   };
 
   if (!supabase) {
@@ -426,33 +685,10 @@ export const saveAdsUpload = async (
     return next;
   }
 
-  if (mode === "replace") {
-    await deleteWhere("ads_raw_files", (query) =>
-      query
-        .eq("report_date", rawFile.reportDate)
-        .eq("ads_platform", platform)
-        .eq("sales_platform_name", rawFile.salesPlatformName)
-        .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
-    );
-
-    if (platform === "Meta") {
-      await deleteWhere("meta_ads", (query) =>
-        query
-          .eq("report_date", rawFile.reportDate)
-          .eq("sales_platform_name", rawFile.salesPlatformName)
-          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
-      );
-    } else {
-      await deleteWhere("tiktok_ads", (query) =>
-        query
-          .eq("report_date", rawFile.reportDate)
-          .eq("sales_platform_name", rawFile.salesPlatformName)
-          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
-      );
-    }
+  if (mode === "replace" && previousFile) {
+    await supersedeAdsRawFile(previousFile.id, versionedFile.id);
   }
-
-  await insertRows("ads_raw_files", [toAdsRawFileRow(rawFile)]);
+  await insertRows("ads_raw_files", [toAdsRawFileRow(versionedFile)]);
 
   if (platform === "Meta") {
     await insertRows("meta_ads", rows.map(toMetaAdsRow));
@@ -460,6 +696,11 @@ export const saveAdsUpload = async (
     await insertRows("tiktok_ads", rows.map(toTikTokAdsRow));
   }
 
+  await recordWrite(mode, "ads_raw_file", "ads_upload", {
+    entityId: versionedFile.id,
+    previousValue: previousFile?.id,
+    newValue: { fileName: versionedFile.fileName, reportDate: versionedFile.reportDate, version: versionedFile.version }
+  });
   return next;
 };
 
@@ -477,6 +718,7 @@ export const deleteDataForDate = async (current: AppData, reportDate: string): P
   await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", reportDate));
   await deleteWhere("sales_raw_files", (query) => query.eq("report_date", reportDate));
   await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  await recordWrite("delete", "day", "sales_upload", { newValue: { reportDate } });
   return next;
 };
 
@@ -495,6 +737,7 @@ export const deleteSalesForDate = async (current: AppData, reportDate: string): 
   await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", reportDate));
   await deleteWhere("sales_raw_files", (query) => query.eq("report_date", reportDate));
   await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  await recordWrite("delete", "sales_raw_file", "sales_upload", { newValue: { reportDate } });
   return next;
 };
 
@@ -512,6 +755,7 @@ export const deleteAdsForDate = async (current: AppData, reportDate: string, pla
   await deleteWhere("ads_raw_files", (query) => query.eq("report_date", reportDate).eq("ads_platform", platform));
   await deleteWhere(platform === "Meta" ? "meta_ads" : "tiktok_ads", (query) => query.eq("report_date", reportDate));
   await deleteWhere("daily_summary", (query) => query.eq("report_date", reportDate));
+  await recordWrite("delete", "ads_raw_file", "ads_upload", { newValue: { reportDate, platform } });
   return next;
 };
 
@@ -542,6 +786,12 @@ export const deleteRawFile = async (current: AppData, rawFileId: string): Promis
     await deleteWhere(adsFile.adsPlatform === "Meta" ? "meta_ads" : "tiktok_ads", (query) => query.eq("source_file_id", rawFileId));
     await deleteWhere("daily_summary", (query) => query.eq("report_date", adsFile.reportDate));
   }
+  const entityType = salesFile ? "sales_raw_file" : "ads_raw_file";
+  const component = salesFile ? "sales_upload" : "ads_upload";
+  await recordWrite("delete", entityType, component, {
+    entityId: rawFileId,
+    newValue: { fileName: (salesFile ?? adsFile)?.fileName }
+  });
   return next;
 };
 
@@ -561,8 +811,13 @@ const fromSalesRawFile = (row: any): SalesRawFile => ({
   filePath: row.file_url,
   uploadedAt: row.uploaded_at,
   reportDate: row.report_date,
+  brandName: row.brand_name || "غير محدد",
   ocrStatus: row.ocr_status,
-  createdAt: row.created_at
+  createdAt: row.created_at,
+  version: Number(row.version) || 1,
+  isCurrent: row.is_current === undefined ? true : Boolean(row.is_current),
+  supersededAt: row.superseded_at ?? null,
+  supersededBy: row.superseded_by ?? null
 });
 
 const toSalesRawFileRow = (row: SalesRawFile) => ({
@@ -571,13 +826,19 @@ const toSalesRawFileRow = (row: SalesRawFile) => ({
   file_url: row.filePath,
   uploaded_at: row.uploadedAt,
   report_date: row.reportDate,
+  brand_name: row.brandName,
   ocr_status: row.ocrStatus,
-  created_at: row.createdAt
+  created_at: row.createdAt,
+  version: row.version,
+  is_current: row.isCurrent,
+  superseded_at: row.supersededAt ?? null,
+  superseded_by: row.supersededBy ?? null
 });
 
 const fromSalesperson = (row: any): SalesBySalesperson => ({
   id: row.id,
   reportDate: row.report_date,
+  brandName: row.brand_name || "غير محدد",
   salespersonName: row.salesperson_name,
   salespersonCode: row.salesperson_code,
   morningOrders: Number(row.morning_orders) || 0,
@@ -593,6 +854,7 @@ const fromSalesperson = (row: any): SalesBySalesperson => ({
 const toSalespersonRow = (row: SalesBySalesperson) => ({
   id: row.id,
   report_date: row.reportDate,
+  brand_name: row.brandName,
   salesperson_name: row.salespersonName,
   salesperson_code: row.salespersonCode,
   morning_orders: row.morningOrders,
@@ -608,6 +870,7 @@ const toSalespersonRow = (row: SalesBySalesperson) => ({
 const fromPlatformSales = (row: any): SalesByPlatform => ({
   id: row.id,
   reportDate: row.report_date,
+  brandName: row.brand_name || "غير محدد",
   platformName: row.platform_name,
   morningOrders: Number(row.morning_orders) || 0,
   morningRevenue: Number(row.morning_revenue) || 0,
@@ -622,6 +885,7 @@ const fromPlatformSales = (row: any): SalesByPlatform => ({
 const toPlatformSalesRow = (row: SalesByPlatform) => ({
   id: row.id,
   report_date: row.reportDate,
+  brand_name: row.brandName,
   platform_name: row.platformName,
   morning_orders: row.morningOrders,
   morning_revenue: row.morningRevenue,
@@ -643,7 +907,11 @@ const fromAdsRawFile = (row: any): AdsRawFile => ({
   salesPlatformName: row.sales_platform_name || "غير محدد",
   adAccountName: row.ad_account_name || "غير محدد",
   parsingStatus: row.parsing_status,
-  createdAt: row.created_at
+  createdAt: row.created_at,
+  version: Number(row.version) || 1,
+  isCurrent: row.is_current === undefined ? true : Boolean(row.is_current),
+  supersededAt: row.superseded_at ?? null,
+  supersededBy: row.superseded_by ?? null
 });
 
 const toAdsRawFileRow = (row: AdsRawFile) => ({
@@ -656,7 +924,11 @@ const toAdsRawFileRow = (row: AdsRawFile) => ({
   sales_platform_name: row.salesPlatformName,
   ad_account_name: row.adAccountName || "غير محدد",
   parsing_status: row.parsingStatus,
-  created_at: row.createdAt
+  created_at: row.createdAt,
+  version: row.version,
+  is_current: row.isCurrent,
+  superseded_at: row.supersededAt ?? null,
+  superseded_by: row.supersededBy ?? null
 });
 
 const fromAdsRow = (row: any, adsPlatform: AdsPlatform): AdsRow => ({
@@ -807,4 +1079,150 @@ const toPlatformMasterRow = (row: PlatformMaster) => ({
   name: row.name,
   aliases: row.aliases,
   active: row.active
+});
+
+const fromBrandMaster = (row: any): BrandMaster => ({
+  id: row.id,
+  name: row.name || "",
+  active: Boolean(row.active)
+});
+
+const toBrandMasterRow = (row: BrandMaster) => ({
+  id: row.id,
+  name: row.name,
+  active: row.active
+});
+
+const fromColumnMapping = (row: any): ColumnMapping => ({
+  id: row.id,
+  signature: row.signature,
+  fields: row.mapping ?? {},
+  sheetLabel: row.sheet_label || "",
+  createdAt: row.created_at,
+  usageCount: Number(row.usage_count) || 0
+});
+
+const toColumnMappingRow = (row: ColumnMapping) => ({
+  id: row.id,
+  signature: row.signature,
+  mapping: row.fields,
+  sheet_label: row.sheetLabel,
+  created_at: row.createdAt,
+  usage_count: row.usageCount
+});
+
+// Section 16 (Backup & Restore). Every table this app writes to, by raw
+// snake_case row shape - a faithful backup doesn't need the camelCase
+// domain conversion, and restoring should write back exactly what was read.
+const BACKUP_TABLES = [
+  "sales_raw_files",
+  "sales_by_salesperson",
+  "sales_by_platform",
+  "ads_raw_files",
+  "meta_ads",
+  "tiktok_ads",
+  "platform_settings",
+  "ocr_page_corrections",
+  "ocr_salesperson_corrections",
+  "salespeople",
+  "platforms",
+  "brands",
+  "column_mappings",
+  "profiles",
+  "audit_log"
+];
+
+export const exportAllTablesForBackup = async (): Promise<Record<string, unknown[]>> => {
+  const entries = await Promise.all(BACKUP_TABLES.map(async (table) => [table, await selectOptionalAll(table)] as const));
+  return Object.fromEntries(entries);
+};
+
+// The one sanctioned exception to "no full-table wipes" (section 12) -
+// reachable only through the dedicated restore route, never as a side
+// effect of a normal save. Truncates and reinserts only the tables present
+// in the snapshot.
+export const restoreTablesFromBackup = async (snapshot: Record<string, unknown[]>): Promise<void> => {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  for (const [table, rows] of Object.entries(snapshot)) {
+    await deleteOptionalAll(table);
+    if (rows.length) await insertOptionalRows(table, rows as Record<string, unknown>[]);
+  }
+};
+
+// Section 15 (File Versioning). "Replace" marks the current file superseded
+// instead of deleting it, then inserts a new version - old versions stay in
+// the database, inspectable, until an explicit purge.
+export const supersedeSalesRawFile = async (existingFileId: string, newFileId: string): Promise<void> => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("sales_raw_files")
+    .update({ is_current: false, superseded_at: new Date().toISOString(), superseded_by: newFileId })
+    .eq("id", existingFileId);
+  if (error && !isMissingTableError(error)) throw error;
+};
+
+export const supersedeAdsRawFile = async (existingFileId: string, newFileId: string): Promise<void> => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("ads_raw_files")
+    .update({ is_current: false, superseded_at: new Date().toISOString(), superseded_by: newFileId })
+    .eq("id", existingFileId);
+  if (error && !isMissingTableError(error)) throw error;
+};
+
+const fromProfileRow = (row: any): Profile => ({
+  id: row.id,
+  displayName: row.display_name || "",
+  role: row.role,
+  active: Boolean(row.active),
+  createdAt: row.created_at
+});
+
+const fromAuditLogRow = (row: any): AuditLogEntry => ({
+  id: row.id,
+  userId: row.user_id,
+  userRole: row.user_role,
+  action: row.action,
+  entityType: row.entity_type,
+  entityId: row.entity_id,
+  previousValue: row.previous_value,
+  newValue: row.new_value,
+  metadata: row.metadata,
+  createdAt: row.created_at
+});
+
+const fromBackupRunRow = (row: any): BackupRun => ({
+  id: row.id,
+  startedAt: row.started_at,
+  completedAt: row.completed_at,
+  status: row.status,
+  destination: row.destination,
+  locationRef: row.location_ref,
+  tableRowCounts: row.table_row_counts,
+  fileCount: Number(row.file_count) || 0,
+  triggeredBy: row.triggered_by,
+  errorMessage: row.error_message
+});
+
+const fromSystemHealthRow = (row: any): SystemHealthStatus => ({
+  component: row.component,
+  status: row.status,
+  lastSuccessAt: row.last_success_at,
+  lastFailureAt: row.last_failure_at,
+  lastErrorMessage: row.last_error_message,
+  updatedAt: row.updated_at
+});
+
+const fromNotificationRow = (row: any): AppNotification => ({
+  id: row.id,
+  severity: row.severity,
+  category: row.category,
+  title: row.title,
+  message: row.message,
+  relatedEntityType: row.related_entity_type,
+  relatedEntityId: row.related_entity_id,
+  isRead: Boolean(row.is_read),
+  readAt: row.read_at,
+  readBy: row.read_by,
+  createdAt: row.created_at
 });
