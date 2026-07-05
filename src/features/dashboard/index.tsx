@@ -33,7 +33,12 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
   const [brand, setBrand] = useState("all");
   const [adsPlatform, setAdsPlatform] = useState("all");
   const scopedData = useMemo(() => scopeData(data, range, salesperson, platform, brand, adsPlatform), [data, range, salesperson, platform, brand, adsPlatform]);
-  const kpis = useMemo(() => calculateKpis(scopedData, range), [scopedData, range]);
+  // A specific Page/Platform is selected -> source the headline totals from
+  // salesByPlatform (that page's own stored figures) instead of
+  // salesBySalesperson, since a salesperson row has no page attribution to
+  // filter by - see calculateKpis' comment for why these are mutually
+  // exclusive axes, not a bug.
+  const kpis = useMemo(() => calculateKpis(scopedData, range, { useSalesByPlatformForTotals: platform !== "all" }), [scopedData, range, platform]);
   const resultCount = useMemo(() => filterAds(scopedData, range).reduce((sum, row) => sum + (Number(row.resultsCount) || Number(row.leads) || Number(row.purchases) || 0), 0), [scopedData, range]);
   const costPerResult = resultCount ? kpis.totalAdsSpend / resultCount : null;
   const trend = useMemo(() => dailyTrend(filterPeople(scopedData, range), filterAds(scopedData, range)), [scopedData, range]);

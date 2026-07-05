@@ -22,17 +22,30 @@ export const filterPlatforms = (data: AppData, range: DateRange) =>
 
 export const filterAds = (data: AppData, range: DateRange) => getAllAdsRows(data).filter((row) => inRange(row.reportDate, range));
 
-export const calculateKpis = (data: AppData, range: DateRange): Kpis => {
+// Salespeople and Pages are two independent tables (Salespeople_Input /
+// Pages_Input) with no per-row link between a salesperson and a page - a
+// salesperson row was never assigned a page, and a page row was never
+// assigned a salesperson, in the source file itself. So the "totals" figures
+// can only be sliced by ONE of the two axes at a time without fabricating a
+// join that doesn't exist:
+//   - no page/platform filter active -> source totals from salespeople (also
+//     correctly sliceable by Salesperson).
+//   - a specific page/platform is selected -> source totals from that page's
+//     own stored total (also correctly sliceable by Brand, which both
+//     tables carry per-row from the upload), since that's the only place a
+//     per-page revenue figure actually exists.
+export const calculateKpis = (data: AppData, range: DateRange, options?: { useSalesByPlatformForTotals?: boolean }): Kpis => {
   const people = filterPeople(data, range);
   const platforms = filterPlatforms(data, range);
   const ads = filterAds(data, range);
+  const salesTotalsSource: Array<SalesBySalesperson | SalesByPlatform> = options?.useSalesByPlatformForTotals ? platforms : people;
 
-  const totalSalesRevenue = sum(people, (row) => row.totalRevenue);
-  const totalOrders = sum(people, (row) => row.totalOrders);
-  const morningOrders = sum(people, (row) => row.morningOrders);
-  const eveningOrders = sum(people, (row) => row.eveningOrders);
-  const morningRevenue = sum(people, (row) => row.morningRevenue);
-  const eveningRevenue = sum(people, (row) => row.eveningRevenue);
+  const totalSalesRevenue = sum(salesTotalsSource, (row) => row.totalRevenue);
+  const totalOrders = sum(salesTotalsSource, (row) => row.totalOrders);
+  const morningOrders = sum(salesTotalsSource, (row) => row.morningOrders);
+  const eveningOrders = sum(salesTotalsSource, (row) => row.eveningOrders);
+  const morningRevenue = sum(salesTotalsSource, (row) => row.morningRevenue);
+  const eveningRevenue = sum(salesTotalsSource, (row) => row.eveningRevenue);
   const metaSpend = sum(ads.filter((row) => row.adsPlatform === "Meta"), (row) => row.spend);
   const tiktokSpend = sum(ads.filter((row) => row.adsPlatform === "TikTok"), (row) => row.spend);
   const totalAdsSpend = metaSpend + tiktokSpend;
