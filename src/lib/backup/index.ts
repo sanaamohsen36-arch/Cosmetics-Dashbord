@@ -91,3 +91,21 @@ export const restoreBackup = async (locationRef: string, restoredBy: string): Pr
   await restoreTablesFromBackup(snapshot);
   await notify("system", "warning", "Database restored from backup", `Restored ${locationRef} by ${restoredBy}`);
 };
+
+export const listBackupRuns = async (limit = 20): Promise<BackupRun[]> => {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from("backup_runs").select("*").order("started_at", { ascending: false }).limit(limit);
+  if (error) return [];
+  return (data ?? []).map((row: any) => ({
+    id: row.id,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
+    status: row.status,
+    destination: row.destination,
+    locationRef: row.location_ref,
+    tableRowCounts: row.table_row_counts,
+    fileCount: row.file_count,
+    triggeredBy: row.triggered_by,
+    errorMessage: row.error_message
+  }));
+};

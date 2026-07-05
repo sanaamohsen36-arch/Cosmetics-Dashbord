@@ -11,10 +11,14 @@ import {
   UserCircle,
   Users
 } from "lucide-react";
-import type { AppData, DateRange, PageKey } from "./types";
+import type { AppData, DateRange, PageKey, Profile } from "./types";
 import { makePeriodRange, today } from "./lib/date";
 import { DateFilters } from "./lib/ui";
 import { emptyData, getStorageMode, loadData, saveData, subscribeToDataChanges } from "./lib/supabase";
+import { isAuthEnabled, getCurrentProfile, onAuthStateChange } from "./lib/auth";
+import { roleLabels } from "./lib/permissions";
+import { LoginForm, SignOutButton } from "./features/auth";
+import { NotificationBell } from "./features/notifications";
 import { SalesFolderPage } from "./features/sales-upload";
 import { AdsFolderPage } from "./features/ads-upload";
 import { DashboardPage } from "./features/dashboard";
@@ -37,6 +41,8 @@ export default function DashboardApp() {
   const [range, setRange] = useState<DateRange>({ from: today, to: today });
   const [periodMode, setPeriodMode] = useState<"day" | "week" | "month">("day");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [authChecked, setAuthChecked] = useState(!isAuthEnabled);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -49,6 +55,26 @@ export default function DashboardApp() {
     void loadData().then(setData);
     return subscribeToDataChanges(() => void loadData().then(setData));
   }, []);
+
+  useEffect(() => {
+    if (!isAuthEnabled) return;
+    void getCurrentProfile().then((current) => {
+      setProfile(current);
+      setAuthChecked(true);
+    });
+    return onAuthStateChange((userId) => {
+      if (!userId) {
+        setProfile(null);
+        return;
+      }
+      void getCurrentProfile().then(setProfile);
+    });
+  }, []);
+
+  if (isAuthEnabled && !authChecked) return null;
+  if (isAuthEnabled && !profile) {
+    return <LoginForm onSignedIn={() => void getCurrentProfile().then(setProfile)} />;
+  }
 
   const commitData = async (next: AppData) => {
     setData(next);
@@ -75,7 +101,8 @@ export default function DashboardApp() {
         </nav>
         <div className="admin-box">
           <UserCircle size={20} />
-          <span>Admin</span>
+          <span>{profile ? `${profile.displayName} - ${roleLabels[profile.role]}` : "Admin"}</span>
+          {isAuthEnabled && profile && <SignOutButton onSignedOut={() => setProfile(null)} />}
           <button className="theme-toggle" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? "Light" : "Dark"}
           </button>
@@ -89,12 +116,15 @@ export default function DashboardApp() {
             <h1>{navItems.find((item) => item.key === page)?.label}</h1>
             <p className="sync-status">متصل بقاعدة البيانات، وأي حفظ جديد ينعكس على اللوحة.</p>
           </div>
-          {page === "dashboard" && (
-            <DateFilters range={range} mode={periodMode} onRangeChange={setRange} onModeChange={(mode) => {
-              setPeriodMode(mode);
-              setRange(makePeriodRange(range.from, mode));
-            }} />
-          )}
+          <div className="topbar-actions">
+            <NotificationBell userId={profile?.id ?? null} />
+            {page === "dashboard" && (
+              <DateFilters range={range} mode={periodMode} onRangeChange={setRange} onModeChange={(mode) => {
+                setPeriodMode(mode);
+                setRange(makePeriodRange(range.from, mode));
+              }} />
+            )}
+          </div>
         </header>
 
         {page === "dashboard" && <DashboardPage data={data} range={range} />}
@@ -102,7 +132,7 @@ export default function DashboardApp() {
         {page === "ads-upload" && <AdsFolderPage data={data} setData={setData} />}
         {page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
         {page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
-        {page === "settings" && <SettingsPage data={data} commitData={commitData} />}
+        {page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
       </main>
     </div>
   );

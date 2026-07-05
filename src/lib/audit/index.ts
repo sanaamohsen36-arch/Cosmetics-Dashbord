@@ -1,4 +1,4 @@
-import type { Role } from "../../types";
+import type { AuditLogEntry, Role } from "../../types";
 import { supabase } from "../supabase/client";
 
 // Section 14: append-only action log. RLS grants insert only - no
@@ -27,4 +27,24 @@ export const logAction = async (
   // Never throw from logging - a failed audit write must not block the
   // actual user-facing action it was describing.
   if (error) console.error("logAction failed", action, entityType, error.message);
+};
+
+const fromRow = (row: any): AuditLogEntry => ({
+  id: row.id,
+  userId: row.user_id,
+  userRole: row.user_role,
+  action: row.action,
+  entityType: row.entity_type,
+  entityId: row.entity_id,
+  previousValue: row.previous_value,
+  newValue: row.new_value,
+  metadata: row.metadata,
+  createdAt: row.created_at
+});
+
+export const listAuditLog = async (limit = 100): Promise<AuditLogEntry[]> => {
+  if (!supabase) return [];
+  const { data, error } = await supabase.from("audit_log").select("*").order("created_at", { ascending: false }).limit(limit);
+  if (error) return [];
+  return (data ?? []).map(fromRow);
 };

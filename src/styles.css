@@ -1067,6 +1067,83 @@ tr.suspicious td {
   opacity: 0.75;
 }
 
+.role-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid #253246;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.login-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.login-card {
+  width: min(360px, 90vw);
+  display: grid;
+  gap: 14px;
+}
+
+.notification-bell {
+  position: relative;
+}
+
+.badge-count {
+  position: absolute;
+  top: -6px;
+  left: -6px;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: #ef4444;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+}
+
+.notification-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: #0b1422;
+  border: 1px solid #1f2a3b;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  z-index: 50;
+}
+
+.notification-item {
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: rgba(148, 163, 184, 0.08);
+  display: grid;
+  gap: 4px;
+}
+
+.notification-item.warning {
+  background: rgba(245, 158, 11, 0.1);
+}
+
+.notification-item.error,
+.notification-item.critical {
+  background: rgba(239, 68, 68, 0.1);
+}
+
 .toggle-row {
   border: 1px solid #253246;
   border-radius: 8px;
