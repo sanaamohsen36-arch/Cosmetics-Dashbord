@@ -149,7 +149,9 @@ function AdsUploadCard({
       salesPlatformName: brandName,
       adAccountName: selectedAdsPlatform,
       parsingStatus: "success",
-      createdAt: now
+      createdAt: now,
+      version: 1,
+      isCurrent: true
     };
     const normalizedRows = rows.map((row) => ({
       ...row,

@@ -15,6 +15,7 @@ import type {
   SalesRawFile,
   UploadMode
 } from "../../types";
+import type { AppNotification, AuditLogEntry, BackupRun, Profile, SystemHealthStatus } from "../../types";
 import { isSubtotalPlatformName } from "../metrics";
 import { isSupabaseConfigured, supabase } from "./client";
 
@@ -62,7 +63,12 @@ export const emptyData = (): AppData => ({
     aliases: [name],
     active: true
   })),
-  columnMappings: []
+  columnMappings: [],
+  profiles: [],
+  auditLog: [],
+  backupRuns: [],
+  systemHealth: [],
+  notifications: []
 });
 
 export const getStorageMode = () => (isSupabaseConfigured ? "Supabase" : "Local fallback");
@@ -110,7 +116,12 @@ export const loadData = async (): Promise<AppData> => {
     ocrSalespersonCorrections,
     salespeople,
     platforms,
-    columnMappings
+    columnMappings,
+    profiles,
+    auditLog,
+    backupRuns,
+    systemHealth,
+    notifications
   ] = await Promise.all([
     selectAll("sales_raw_files"),
     selectAll("sales_by_salesperson"),
@@ -123,22 +134,39 @@ export const loadData = async (): Promise<AppData> => {
     selectOptionalAll("ocr_salesperson_corrections"),
     selectOptionalAll("salespeople"),
     selectOptionalAll("platforms"),
-    selectOptionalAll("column_mappings")
+    selectOptionalAll("column_mappings"),
+    selectOptionalAll("profiles"),
+    selectOptionalAll("audit_log"),
+    selectOptionalAll("backup_runs"),
+    selectOptionalAll("system_health_status"),
+    selectOptionalAll("notifications")
   ]);
 
+  // Section 15: only current file versions and the rows tied to them are
+  // loaded into the app's working data - superseded versions stay in the
+  // database (inspectable, purge-only) but are never double-counted in
+  // aggregation/reporting.
+  const currentSalesFileIds = new Set(salesRawFiles.filter((row) => row.is_current !== false).map((row) => row.id));
+  const currentAdsFileIds = new Set(adsRawFiles.filter((row) => row.is_current !== false).map((row) => row.id));
+
   return {
-    salesRawFiles: salesRawFiles.map(fromSalesRawFile),
-    salesBySalesperson: salesBySalesperson.map(fromSalesperson),
-    salesByPlatform: salesByPlatform.map(fromPlatformSales),
-    adsRawFiles: adsRawFiles.map(fromAdsRawFile),
-    metaAds: metaAds.map((row) => fromAdsRow(row, "Meta")),
-    tiktokAds: tiktokAds.map((row) => fromAdsRow(row, "TikTok")),
+    salesRawFiles: salesRawFiles.filter((row) => row.is_current !== false).map(fromSalesRawFile),
+    salesBySalesperson: salesBySalesperson.filter((row) => currentSalesFileIds.has(row.source_file_id)).map(fromSalesperson),
+    salesByPlatform: salesByPlatform.filter((row) => currentSalesFileIds.has(row.source_file_id)).map(fromPlatformSales),
+    adsRawFiles: adsRawFiles.filter((row) => row.is_current !== false).map(fromAdsRawFile),
+    metaAds: metaAds.filter((row) => currentAdsFileIds.has(row.source_file_id)).map((row) => fromAdsRow(row, "Meta")),
+    tiktokAds: tiktokAds.filter((row) => currentAdsFileIds.has(row.source_file_id)).map((row) => fromAdsRow(row, "TikTok")),
     platformSettings: mergeDefaultPlatforms(platformSettings.map(fromPlatformSetting)),
     ocrPageCorrections: ocrPageCorrections.map(fromOcrPageCorrection),
     ocrSalespersonCorrections: ocrSalespersonCorrections.map(fromOcrSalespersonCorrection),
     salespeople: salespeople.map(fromSalespersonMaster),
     platforms: mergeDefaultPlatformMasters(platforms.map(fromPlatformMaster)),
-    columnMappings: columnMappings.map(fromColumnMapping)
+    columnMappings: columnMappings.map(fromColumnMapping),
+    profiles: profiles.map(fromProfileRow),
+    auditLog: auditLog.map(fromAuditLogRow),
+    backupRuns: backupRuns.map(fromBackupRunRow),
+    systemHealth: systemHealth.map(fromSystemHealthRow),
+    notifications: notifications.map(fromNotificationRow)
   };
 };
 
@@ -352,7 +380,12 @@ const loadLocalData = (): AppData => {
       ocrSalespersonCorrections: parsed.ocrSalespersonCorrections ?? [],
       salespeople: parsed.salespeople ?? [],
       platforms: mergeDefaultPlatformMasters(parsed.platforms ?? []),
-      columnMappings: parsed.columnMappings ?? []
+      columnMappings: parsed.columnMappings ?? [],
+      profiles: parsed.profiles ?? [],
+      auditLog: parsed.auditLog ?? [],
+      backupRuns: parsed.backupRuns ?? [],
+      systemHealth: parsed.systemHealth ?? [],
+      notifications: parsed.notifications ?? []
     };
   } catch {
     return emptyData();
@@ -490,6 +523,11 @@ const ensureDefaultPlatforms = async () => {
   await insertRows("platform_settings", missing.map(toPlatformSettingRow));
 };
 
+// Section 15 (File Versioning): "replace" no longer deletes anything. The
+// previous current file (and its rows) stays in the database, marked
+// superseded; the new upload is inserted as the next version. Aggregation
+// (loadData below) only ever reads is_current rows, so superseded versions
+// are never double-counted, but they remain inspectable.
 export const saveSalesUpload = async (
   current: AppData,
   rawFile: SalesRawFile,
@@ -498,21 +536,32 @@ export const saveSalesUpload = async (
   mode: UploadMode
 ): Promise<AppData> => {
   if (mode === "cancel") return current;
-  const withoutDate =
+  const previousFile = current.salesRawFiles.find((file) => file.reportDate === rawFile.reportDate && file.isCurrent);
+  const versionedFile: SalesRawFile = {
+    ...rawFile,
+    version: mode === "replace" && previousFile ? previousFile.version + 1 : 1,
+    isCurrent: true
+  };
+
+  const withoutCurrent =
     mode === "replace"
       ? {
           ...current,
-          salesRawFiles: current.salesRawFiles.filter((file) => file.reportDate !== rawFile.reportDate),
+          salesRawFiles: current.salesRawFiles.map((file) =>
+            file.reportDate === rawFile.reportDate && file.isCurrent
+              ? { ...file, isCurrent: false, supersededAt: rawFile.createdAt, supersededBy: versionedFile.id }
+              : file
+          ),
           salesBySalesperson: current.salesBySalesperson.filter((row) => row.reportDate !== rawFile.reportDate),
           salesByPlatform: current.salesByPlatform.filter((row) => row.reportDate !== rawFile.reportDate)
         }
       : current;
 
   const next = {
-    ...withoutDate,
-    salesRawFiles: [...withoutDate.salesRawFiles, rawFile],
-    salesBySalesperson: [...withoutDate.salesBySalesperson, ...people],
-    salesByPlatform: [...withoutDate.salesByPlatform, ...platforms]
+    ...withoutCurrent,
+    salesRawFiles: [...withoutCurrent.salesRawFiles, versionedFile],
+    salesBySalesperson: [...withoutCurrent.salesBySalesperson, ...people],
+    salesByPlatform: [...withoutCurrent.salesByPlatform, ...platforms]
   };
 
   if (!supabase) {
@@ -520,12 +569,10 @@ export const saveSalesUpload = async (
     return next;
   }
 
-  if (mode === "replace") {
-    await deleteWhere("sales_raw_files", (query) => query.eq("report_date", rawFile.reportDate));
-    await deleteWhere("sales_by_salesperson", (query) => query.eq("report_date", rawFile.reportDate));
-    await deleteWhere("sales_by_platform", (query) => query.eq("report_date", rawFile.reportDate));
+  if (mode === "replace" && previousFile) {
+    await supersedeSalesRawFile(previousFile.id, versionedFile.id);
   }
-  await insertRows("sales_raw_files", [toSalesRawFileRow(rawFile)]);
+  await insertRows("sales_raw_files", [toSalesRawFileRow(versionedFile)]);
   await insertRows("sales_by_salesperson", people.map(toSalespersonRow));
   await insertRows("sales_by_platform", platforms.map(toPlatformSalesRow));
   return next;
@@ -540,18 +587,26 @@ export const saveAdsUpload = async (
 ): Promise<AppData> => {
   if (mode === "cancel") return current;
   const tableKey = platform === "Meta" ? "metaAds" : "tiktokAds";
-  const withoutDate =
+  const matchesSlot = (file: AdsRawFile) =>
+    file.reportDate === rawFile.reportDate &&
+    file.adsPlatform === platform &&
+    file.salesPlatformName === rawFile.salesPlatformName &&
+    (file.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد");
+  const previousFile = current.adsRawFiles.find((file) => matchesSlot(file) && file.isCurrent);
+  const versionedFile: AdsRawFile = {
+    ...rawFile,
+    version: mode === "replace" && previousFile ? previousFile.version + 1 : 1,
+    isCurrent: true
+  };
+
+  const withoutCurrent =
     mode === "replace"
       ? {
           ...current,
-          adsRawFiles: current.adsRawFiles.filter(
-            (file) =>
-              !(
-                file.reportDate === rawFile.reportDate &&
-                file.adsPlatform === platform &&
-                file.salesPlatformName === rawFile.salesPlatformName &&
-                (file.adAccountName || "غير محدد") === (rawFile.adAccountName || "غير محدد")
-              )
+          adsRawFiles: current.adsRawFiles.map((file) =>
+            matchesSlot(file) && file.isCurrent
+              ? { ...file, isCurrent: false, supersededAt: rawFile.createdAt, supersededBy: versionedFile.id }
+              : file
           ),
           [tableKey]: current[tableKey].filter(
             (row) =>
@@ -565,9 +620,9 @@ export const saveAdsUpload = async (
       : current;
 
   const next = {
-    ...withoutDate,
-    adsRawFiles: [...withoutDate.adsRawFiles, rawFile],
-    [tableKey]: [...withoutDate[tableKey], ...rows]
+    ...withoutCurrent,
+    adsRawFiles: [...withoutCurrent.adsRawFiles, versionedFile],
+    [tableKey]: [...withoutCurrent[tableKey], ...rows]
   };
 
   if (!supabase) {
@@ -575,33 +630,10 @@ export const saveAdsUpload = async (
     return next;
   }
 
-  if (mode === "replace") {
-    await deleteWhere("ads_raw_files", (query) =>
-      query
-        .eq("report_date", rawFile.reportDate)
-        .eq("ads_platform", platform)
-        .eq("sales_platform_name", rawFile.salesPlatformName)
-        .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
-    );
-
-    if (platform === "Meta") {
-      await deleteWhere("meta_ads", (query) =>
-        query
-          .eq("report_date", rawFile.reportDate)
-          .eq("sales_platform_name", rawFile.salesPlatformName)
-          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
-      );
-    } else {
-      await deleteWhere("tiktok_ads", (query) =>
-        query
-          .eq("report_date", rawFile.reportDate)
-          .eq("sales_platform_name", rawFile.salesPlatformName)
-          .eq("ad_account_name", rawFile.adAccountName || "غير محدد")
-      );
-    }
+  if (mode === "replace" && previousFile) {
+    await supersedeAdsRawFile(previousFile.id, versionedFile.id);
   }
-
-  await insertRows("ads_raw_files", [toAdsRawFileRow(rawFile)]);
+  await insertRows("ads_raw_files", [toAdsRawFileRow(versionedFile)]);
 
   if (platform === "Meta") {
     await insertRows("meta_ads", rows.map(toMetaAdsRow));
@@ -711,7 +743,11 @@ const fromSalesRawFile = (row: any): SalesRawFile => ({
   uploadedAt: row.uploaded_at,
   reportDate: row.report_date,
   ocrStatus: row.ocr_status,
-  createdAt: row.created_at
+  createdAt: row.created_at,
+  version: Number(row.version) || 1,
+  isCurrent: row.is_current === undefined ? true : Boolean(row.is_current),
+  supersededAt: row.superseded_at ?? null,
+  supersededBy: row.superseded_by ?? null
 });
 
 const toSalesRawFileRow = (row: SalesRawFile) => ({
@@ -721,7 +757,11 @@ const toSalesRawFileRow = (row: SalesRawFile) => ({
   uploaded_at: row.uploadedAt,
   report_date: row.reportDate,
   ocr_status: row.ocrStatus,
-  created_at: row.createdAt
+  created_at: row.createdAt,
+  version: row.version,
+  is_current: row.isCurrent,
+  superseded_at: row.supersededAt ?? null,
+  superseded_by: row.supersededBy ?? null
 });
 
 const fromSalesperson = (row: any): SalesBySalesperson => ({
@@ -792,7 +832,11 @@ const fromAdsRawFile = (row: any): AdsRawFile => ({
   salesPlatformName: row.sales_platform_name || "غير محدد",
   adAccountName: row.ad_account_name || "غير محدد",
   parsingStatus: row.parsing_status,
-  createdAt: row.created_at
+  createdAt: row.created_at,
+  version: Number(row.version) || 1,
+  isCurrent: row.is_current === undefined ? true : Boolean(row.is_current),
+  supersededAt: row.superseded_at ?? null,
+  supersededBy: row.superseded_by ?? null
 });
 
 const toAdsRawFileRow = (row: AdsRawFile) => ({
@@ -805,7 +849,11 @@ const toAdsRawFileRow = (row: AdsRawFile) => ({
   sales_platform_name: row.salesPlatformName,
   ad_account_name: row.adAccountName || "غير محدد",
   parsing_status: row.parsingStatus,
-  created_at: row.createdAt
+  created_at: row.createdAt,
+  version: row.version,
+  is_current: row.isCurrent,
+  superseded_at: row.supersededAt ?? null,
+  superseded_by: row.supersededBy ?? null
 });
 
 const fromAdsRow = (row: any, adsPlatform: AdsPlatform): AdsRow => ({
@@ -974,4 +1022,119 @@ const toColumnMappingRow = (row: ColumnMapping) => ({
   sheet_label: row.sheetLabel,
   created_at: row.createdAt,
   usage_count: row.usageCount
+});
+
+// Section 16 (Backup & Restore). Every table this app writes to, by raw
+// snake_case row shape - a faithful backup doesn't need the camelCase
+// domain conversion, and restoring should write back exactly what was read.
+const BACKUP_TABLES = [
+  "sales_raw_files",
+  "sales_by_salesperson",
+  "sales_by_platform",
+  "ads_raw_files",
+  "meta_ads",
+  "tiktok_ads",
+  "platform_settings",
+  "ocr_page_corrections",
+  "ocr_salesperson_corrections",
+  "salespeople",
+  "platforms",
+  "column_mappings",
+  "profiles",
+  "audit_log"
+];
+
+export const exportAllTablesForBackup = async (): Promise<Record<string, unknown[]>> => {
+  const entries = await Promise.all(BACKUP_TABLES.map(async (table) => [table, await selectOptionalAll(table)] as const));
+  return Object.fromEntries(entries);
+};
+
+// The one sanctioned exception to "no full-table wipes" (section 12) -
+// reachable only through the dedicated restore route, never as a side
+// effect of a normal save. Truncates and reinserts only the tables present
+// in the snapshot.
+export const restoreTablesFromBackup = async (snapshot: Record<string, unknown[]>): Promise<void> => {
+  if (!supabase) throw new Error("Supabase is not configured.");
+  for (const [table, rows] of Object.entries(snapshot)) {
+    await deleteOptionalAll(table);
+    if (rows.length) await insertOptionalRows(table, rows as Record<string, unknown>[]);
+  }
+};
+
+// Section 15 (File Versioning). "Replace" marks the current file superseded
+// instead of deleting it, then inserts a new version - old versions stay in
+// the database, inspectable, until an explicit purge.
+export const supersedeSalesRawFile = async (existingFileId: string, newFileId: string): Promise<void> => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("sales_raw_files")
+    .update({ is_current: false, superseded_at: new Date().toISOString(), superseded_by: newFileId })
+    .eq("id", existingFileId);
+  if (error && !isMissingTableError(error)) throw error;
+};
+
+export const supersedeAdsRawFile = async (existingFileId: string, newFileId: string): Promise<void> => {
+  if (!supabase) return;
+  const { error } = await supabase
+    .from("ads_raw_files")
+    .update({ is_current: false, superseded_at: new Date().toISOString(), superseded_by: newFileId })
+    .eq("id", existingFileId);
+  if (error && !isMissingTableError(error)) throw error;
+};
+
+const fromProfileRow = (row: any): Profile => ({
+  id: row.id,
+  displayName: row.display_name || "",
+  role: row.role,
+  active: Boolean(row.active),
+  createdAt: row.created_at
+});
+
+const fromAuditLogRow = (row: any): AuditLogEntry => ({
+  id: row.id,
+  userId: row.user_id,
+  userRole: row.user_role,
+  action: row.action,
+  entityType: row.entity_type,
+  entityId: row.entity_id,
+  previousValue: row.previous_value,
+  newValue: row.new_value,
+  metadata: row.metadata,
+  createdAt: row.created_at
+});
+
+const fromBackupRunRow = (row: any): BackupRun => ({
+  id: row.id,
+  startedAt: row.started_at,
+  completedAt: row.completed_at,
+  status: row.status,
+  destination: row.destination,
+  locationRef: row.location_ref,
+  tableRowCounts: row.table_row_counts,
+  fileCount: Number(row.file_count) || 0,
+  triggeredBy: row.triggered_by,
+  errorMessage: row.error_message
+});
+
+const fromSystemHealthRow = (row: any): SystemHealthStatus => ({
+  component: row.component,
+  status: row.status,
+  lastSuccessAt: row.last_success_at,
+  lastFailureAt: row.last_failure_at,
+  lastErrorMessage: row.last_error_message,
+  updatedAt: row.updated_at
+});
+
+const fromNotificationRow = (row: any): AppNotification => ({
+  id: row.id,
+  severity: row.severity,
+  category: row.category,
+  title: row.title,
+  message: row.message,
+  relatedEntityType: row.related_entity_type,
+  relatedEntityId: row.related_entity_id,
+  isRead: Boolean(row.is_read),
+  readAt: row.read_at,
+  readBy: row.read_by,
+  createdAt: row.created_at
 });

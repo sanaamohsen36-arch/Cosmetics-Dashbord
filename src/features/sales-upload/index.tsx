@@ -174,7 +174,9 @@ function SalesUploadCard({
       uploadedAt: now,
       reportDate: activeDate,
       ocrStatus: "success",
-      createdAt: now
+      createdAt: now,
+      version: 1,
+      isCurrent: true
     };
 
     let workingData = data;
