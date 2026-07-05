@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { ApiError, getServiceClient, handleApiError, requireOwner } from "../../../../../lib/supabase/admin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 const VALID_ROLES = ["owner", "admin", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
 // Effectively permanent (~100 years) - GoTrue's ban mechanism, used instead

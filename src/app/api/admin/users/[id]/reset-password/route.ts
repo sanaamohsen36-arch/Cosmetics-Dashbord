@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { ApiError, getServiceClient, handleApiError, requireOwner } from "../../../../../../lib/supabase/admin";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+export const fetchCache = "force-no-store";
 
 // Sends a Supabase password-recovery email instead of ever handling a
 // plaintext password on this server - the user sets their own new password

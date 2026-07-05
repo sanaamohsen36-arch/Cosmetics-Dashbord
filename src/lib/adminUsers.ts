@@ -19,7 +19,7 @@ const readError = async (response: Response, fallback: string) => {
 
 export const listAllUsers = async (): Promise<AdminUser[]> => {
   if (!supabase) return [];
-  const response = await fetch("/api/admin/users", { headers: await authHeader() });
+  const response = await fetch("/api/admin/users", { headers: await authHeader(), cache: "no-store" });
   if (!response.ok) throw await readError(response, "Failed to load users.");
   return response.json();
 };
@@ -28,7 +28,8 @@ export const inviteUser = async (input: { email: string; displayName: string; ro
   const response = await fetch("/api/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await authHeader()) },
-    body: JSON.stringify(input)
+    body: JSON.stringify(input),
+    cache: "no-store"
   });
   if (!response.ok) throw await readError(response, "Failed to create user.");
   return response.json();
@@ -38,7 +39,8 @@ export const updateUser = async (id: string, patch: { role?: Role; active?: bool
   const response = await fetch(`/api/admin/users/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...(await authHeader()) },
-    body: JSON.stringify(patch)
+    body: JSON.stringify(patch),
+    cache: "no-store"
   });
   if (!response.ok) throw await readError(response, "Failed to update user.");
 };
@@ -46,7 +48,8 @@ export const updateUser = async (id: string, patch: { role?: Role; active?: bool
 export const sendPasswordReset = async (id: string): Promise<void> => {
   const response = await fetch(`/api/admin/users/${id}/reset-password`, {
     method: "POST",
-    headers: await authHeader()
+    headers: await authHeader(),
+    cache: "no-store"
   });
   if (!response.ok) throw await readError(response, "Failed to send reset email.");
 };
