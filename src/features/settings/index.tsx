@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Archive, History, Lock } from "lucide-react";
+import { Activity, Archive, History, Lock, Trash2 } from "lucide-react";
 import type { AppData, BackupRun, Profile, Role, SystemHealthStatus, AuditLogEntry } from "../../types";
 import { createId } from "../../lib/supabase";
 import { Badge } from "../../lib/ui";
@@ -55,6 +55,12 @@ export function SettingsPage({
     setBrandName("");
   };
 
+  const deleteBrand = async (id: string) => {
+    const confirmed = window.confirm("Remove this brand from every Brand selector?");
+    if (!confirmed) return;
+    await commitData({ ...data, brands: data.brands.filter((item) => item.id !== id) });
+  };
+
   return (
     <div className="content-grid">
       <section className="panel">
@@ -93,7 +99,17 @@ export function SettingsPage({
           </label>
           <button className="primary" onClick={addBrand}>Add</button>
         </div>
-        <ul className="settings-list">{data.brands.map((item) => <li key={item.id}>{item.name}</li>)}</ul>
+        <ul className="settings-list">
+          {data.brands.map((item) => (
+            <li key={item.id} className="file-row">
+              {item.name}
+              <button className="ghost" onClick={() => deleteBrand(item.id)}>
+                <Trash2 size={16} />
+                Delete
+              </button>
+            </li>
+          ))}
+        </ul>
       </section>
       <section className="panel wide">
         <h2>Ads platform mapping</h2>
