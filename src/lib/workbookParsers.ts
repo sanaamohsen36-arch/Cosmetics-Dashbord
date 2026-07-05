@@ -1,14 +1,27 @@
 import * as XLSX from "xlsx";
-import type { AdsPlatform, AdsRow, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
+import type { AdsPlatform, AdsRow, ColumnMapping, MappableField, SalesByPlatform, SalesBySalesperson, SalesGroupType, SalesRowType } from "../types";
 import { createId } from "./supabase";
 import { normalizeArabicText } from "./normalize";
+import { findSavedMapping } from "./mapping-memory/columnMapping";
 import { requestOcrExtraction } from "./ocr/client";
+
+// Surfaced when a sheet's headers don't match a saved mapping or any known
+// alias, so the UI can show the Mapping Wizard instead of failing outright.
+// Carries the raw rows so the wizard-confirm handler can parse just this
+// grid with the user's manual assignment, without re-reading the file.
+export type PendingColumnMapping = {
+  gridLabel: string;
+  headers: string[];
+  rows: unknown[][];
+  headerRowIndex: number;
+};
 
 type ParsedSalesWorkbook = {
   people: SalesBySalesperson[];
   platforms: SalesByPlatform[];
   errors: string[];
   debug: WorkbookDebug[];
+  pendingMapping?: PendingColumnMapping;
 };
 
 type WorkbookDebug = {
@@ -55,6 +68,14 @@ const adAliases = {
 // Shared by the Excel/CSV path and the OCR path: both ultimately produce a plain
 // row-major grid of cell text, so column detection, shift/subtotal classification,
 // and numeric validation only need to live once.
+//
+// Column recognition is three-tier, in priority order:
+//   1. A previously-confirmed mapping for this exact header layout (learned
+//      from the Mapping Wizard) - applied directly, no alias guessing.
+//   2. Alias-based automatic detection (detectPeopleColumns/detectPageColumns).
+//   3. Neither matched - hand the raw headers back as a "pending mapping" so
+//      the UI can show the Mapping Wizard instead of silently returning
+//      nothing or hard-failing.
 const processGridIntoMaps = (
   rows: unknown[][],
   gridLabel: string,
@@ -64,7 +85,9 @@ const processGridIntoMaps = (
   peopleMap: Map<string, SalesBySalesperson>,
   platformMap: Map<string, SalesByPlatform>,
   errors: string[],
-  debug: WorkbookDebug[]
+  debug: WorkbookDebug[],
+  savedMappings: ColumnMapping[],
+  pendingMappings: PendingColumnMapping[]
 ) => {
   const headerRowIndex = rows.findIndex((row) => row.some((cell) => normalizeHeader(cell).length > 0));
   if (headerRowIndex < 0) return;
@@ -77,21 +100,23 @@ const processGridIntoMaps = (
   });
   console.info("Sales grid inspected", debug[debug.length - 1]);
 
+  const savedMapping = findSavedMapping(savedMappings, headers);
+  if (savedMapping) {
+    applyManualMappingToMaps(rows, headerRowIndex, savedMapping.fields, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors);
+    return;
+  }
+
   const normalizedHeaders = headers.map(normalizeHeader);
   const peopleColumns = detectPeopleColumns(normalizedHeaders);
   const pageColumns = detectPageColumns(normalizedHeaders, peopleColumns?.endIndex ?? -1);
   const sheetType = detectSheetType(gridLabel, normalizedHeaders);
 
-  // Neither table was recognized in this sheet - without this check, the
-  // parser silently returns empty people/platforms with zero errors, and the
-  // upload UI shows a false "Preview ready" with no rows and no way to save.
+  // Neither table was recognized in this sheet and there's no learned
+  // mapping for it either - defer to the Mapping Wizard instead of silently
+  // returning nothing (the previous behavior: empty result, zero errors, a
+  // false "Preview ready" with no way to save).
   if (!peopleColumns && !pageColumns) {
-    const foundHeaders = headers.filter((value) => value && !isUnnamed(value)).join("، ");
-    errors.push(
-      `لم يتم التعرف على أعمدة السيلز أو الصفحات في "${gridLabel}". ` +
-        `الأعمدة الموجودة: ${foundHeaders || "لا يوجد"}. ` +
-        `تأكدي من وجود أعمدة مثل "اسم السيلز"/"الشيفت"/"عدد الاوردرات"/"قيمة الاوردرات" أو "الصفحة".`
-    );
+    pendingMappings.push({ gridLabel, headers, rows, headerRowIndex });
     return;
   }
 
@@ -113,10 +138,141 @@ const processGridIntoMaps = (
   }
 };
 
+// Reads a single row using a manual (wizard-confirmed or learned) field ->
+// column-index mapping, instead of the alias-detected column groups above.
+const readManualMappedRow = (
+  row: unknown[],
+  mapping: Partial<Record<MappableField, number>>,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  platformMap: Map<string, SalesByPlatform>
+) => {
+  const getText = (field: MappableField) => {
+    const index = mapping[field];
+    return index === undefined ? "" : String(row[index] ?? "").trim();
+  };
+  const getNum = (field: MappableField) => {
+    const index = mapping[field];
+    if (index === undefined || !hasValue(row[index])) return 0;
+    return toNumber(row[index]);
+  };
+  // If the file splits morning/evening into their own columns, use those
+  // directly; otherwise treat a single Orders/Revenue pair as one unsplit
+  // bucket (kept under "morning" by convention so totals still add up).
+  const morningOrders = mapping.morningOrders !== undefined ? getNum("morningOrders") : getNum("orders");
+  const morningRevenue = mapping.morningRevenue !== undefined ? getNum("morningRevenue") : getNum("revenue");
+  const eveningOrders = mapping.eveningOrders !== undefined ? getNum("eveningOrders") : 0;
+  const eveningRevenue = mapping.eveningRevenue !== undefined ? getNum("eveningRevenue") : 0;
+
+  const name = getText("salespersonName");
+  if (name) {
+    const existing =
+      peopleMap.get(name) ??
+      {
+        id: createId(),
+        reportDate: fallbackDate,
+        salespersonName: name,
+        salespersonCode: "",
+        morningOrders: 0,
+        morningRevenue: 0,
+        eveningOrders: 0,
+        eveningRevenue: 0,
+        totalOrders: 0,
+        totalRevenue: 0,
+        sourceFileId,
+        createdAt
+      };
+    existing.morningOrders += morningOrders;
+    existing.morningRevenue += morningRevenue;
+    existing.eveningOrders += eveningOrders;
+    existing.eveningRevenue += eveningRevenue;
+    existing.totalOrders = existing.morningOrders + existing.eveningOrders;
+    existing.totalRevenue = existing.morningRevenue + existing.eveningRevenue;
+    peopleMap.set(name, existing);
+  }
+
+  const pageName = getText("pageName");
+  if (pageName) {
+    const category = getText("platform");
+    const existing =
+      platformMap.get(pageName) ??
+      {
+        id: createId(),
+        reportDate: fallbackDate,
+        platformCategory: category,
+        groupType: classifySalesGroup(pageName, category),
+        rowType: classifySalesRowType(pageName),
+        platformName: pageName,
+        morningOrders: 0,
+        morningRevenue: 0,
+        eveningOrders: 0,
+        eveningRevenue: 0,
+        totalOrders: 0,
+        totalRevenue: 0,
+        sourceFileId,
+        createdAt
+      };
+    existing.morningOrders += morningOrders;
+    existing.morningRevenue += morningRevenue;
+    existing.eveningOrders += eveningOrders;
+    existing.eveningRevenue += eveningRevenue;
+    existing.totalOrders = existing.morningOrders + existing.eveningOrders;
+    existing.totalRevenue = existing.morningRevenue + existing.eveningRevenue;
+    platformMap.set(pageName, existing);
+  }
+};
+
+const applyManualMappingToMaps = (
+  rows: unknown[][],
+  headerRowIndex: number,
+  mapping: Partial<Record<MappableField, number>>,
+  fallbackDate: string,
+  sourceFileId: string,
+  createdAt: string,
+  peopleMap: Map<string, SalesBySalesperson>,
+  platformMap: Map<string, SalesByPlatform>,
+  errors: string[]
+) => {
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
+    if (isEmptyRow(row)) continue;
+    try {
+      readManualMappedRow(row, mapping, fallbackDate, sourceFileId, createdAt, peopleMap, platformMap);
+    } catch (error) {
+      errors.push(`صف ${rowIndex + 1}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+};
+
+// Called by the UI once the user confirms the Mapping Wizard for a specific
+// pending grid. Produces the same shape as the alias-detected path so the
+// preview/save flow downstream doesn't need to know which path was used.
+export const applyManualColumnMapping = (
+  rows: unknown[][],
+  headerRowIndex: number,
+  mapping: Partial<Record<MappableField, number>>,
+  fallbackDate: string,
+  sourceFileId: string
+): { people: SalesBySalesperson[]; platforms: SalesByPlatform[]; errors: string[] } => {
+  const now = new Date().toISOString();
+  const peopleMap = new Map<string, SalesBySalesperson>();
+  const platformMap = new Map<string, SalesByPlatform>();
+  const errors: string[] = [];
+  applyManualMappingToMaps(rows, headerRowIndex, mapping, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors);
+  return {
+    people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
+    errors
+  };
+};
+
 export const parseSalesWorkbook = async (
   file: File,
   fallbackDate: string,
-  sourceFileId: string
+  sourceFileId: string,
+  savedMappings: ColumnMapping[] = []
 ): Promise<ParsedSalesWorkbook> => {
   const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
   const now = new Date().toISOString();
@@ -124,18 +280,20 @@ export const parseSalesWorkbook = async (
   const platformMap = new Map<string, SalesByPlatform>();
   const errors: string[] = [];
   const debug: WorkbookDebug[] = [];
+  const pendingMappings: PendingColumnMapping[] = [];
 
   for (const sheetName of workbook.SheetNames) {
     const sheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: false });
-    processGridIntoMaps(rows, sheetName, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug);
+    processGridIntoMaps(rows, sheetName, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug, savedMappings, pendingMappings);
   }
 
   return {
     people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
     platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
     errors,
-    debug
+    debug,
+    pendingMapping: pendingMappings[0]
   };
 };
 
@@ -146,34 +304,38 @@ export const parseSalesGrid = (
   rows: unknown[][],
   fallbackDate: string,
   sourceFileId: string,
-  gridLabel = "ocr"
+  gridLabel = "ocr",
+  savedMappings: ColumnMapping[] = []
 ): ParsedSalesWorkbook => {
   const now = new Date().toISOString();
   const peopleMap = new Map<string, SalesBySalesperson>();
   const platformMap = new Map<string, SalesByPlatform>();
   const errors: string[] = [];
   const debug: WorkbookDebug[] = [];
+  const pendingMappings: PendingColumnMapping[] = [];
 
-  processGridIntoMaps(rows, gridLabel, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug);
+  processGridIntoMaps(rows, gridLabel, fallbackDate, sourceFileId, now, peopleMap, platformMap, errors, debug, savedMappings, pendingMappings);
 
   return {
     people: [...peopleMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
     platforms: [...platformMap.values()].sort((a, b) => b.totalRevenue - a.totalRevenue),
     errors,
-    debug
+    debug,
+    pendingMapping: pendingMappings[0]
   };
 };
 
 export const parseSalesImage = async (
   file: File,
   fallbackDate: string,
-  sourceFileId: string
+  sourceFileId: string,
+  savedMappings: ColumnMapping[] = []
 ): Promise<ParsedSalesWorkbook> => {
   const extraction = await requestOcrExtraction(file, fallbackDate);
   if (extraction.warnings.length) {
     console.warn("Sales OCR warnings", extraction.providerId, extraction.warnings);
   }
-  return parseSalesGrid(extraction.rows, fallbackDate, sourceFileId, `ocr:${extraction.providerId}`);
+  return parseSalesGrid(extraction.rows, fallbackDate, sourceFileId, `ocr:${extraction.providerId}`, savedMappings);
 };
 
 export const parseAdsWorkbook = async (

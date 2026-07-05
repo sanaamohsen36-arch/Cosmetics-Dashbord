@@ -1,6 +1,8 @@
 import type { OcrPageCorrection, OcrSalespersonCorrection, SalesByPlatform, SalesBySalesperson } from "../../types";
 import { normalizeArabicText } from "../normalize";
 
+export { computeHeaderSignature, findSavedMapping, mappableFieldLabels, mappableFields } from "./columnMapping";
+
 // Applies previously-saved user corrections to freshly parsed rows, before
 // they're shown in the editable preview. Salesperson corrections are scoped
 // to a code where one is known (two people can share a misread name), page

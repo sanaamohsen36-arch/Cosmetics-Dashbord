@@ -2,25 +2,29 @@
 
 import { useRef, useState } from "react";
 import { FileSpreadsheet, FolderOpen, RotateCcw, Save, Trash2 } from "lucide-react";
-import type { AppData, SalesByPlatform, SalesBySalesperson, SalesRawFile } from "../../types";
+import type { AppData, MappableField, SalesByPlatform, SalesBySalesperson, SalesRawFile } from "../../types";
 import { firstDayOfMonth, monthKey, today } from "../../lib/date";
 import { integer, money } from "../../lib/format";
 import { Badge, CalendarMonth, ErrorList, MonthFolderList, SimpleTable } from "../../lib/ui";
 import {
   applyPageCorrections,
   applySalespersonCorrections,
+  computeHeaderSignature,
   diffPageCorrections,
   diffSalespersonCorrections
 } from "../../lib/mapping-memory";
 import {
   createId,
   deleteRawFile,
+  recordColumnMapping,
   recordPageCorrection,
   recordSalespersonCorrection,
   saveMasterDataAdditions,
   saveSalesUpload
 } from "../../lib/supabase";
-import { parseSalesImage, parseSalesWorkbook } from "../../lib/workbookParsers";
+import type { PendingColumnMapping } from "../../lib/workbookParsers";
+import { applyManualColumnMapping, parseSalesImage, parseSalesWorkbook } from "../../lib/workbookParsers";
+import { MappingWizard } from "./MappingWizard";
 
 export function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
   const [selectedDate, setSelectedDate] = useState(today);
@@ -107,10 +111,11 @@ function SalesUploadCard({
   const [errors, setErrors] = useState<string[]>([]);
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [pendingMapping, setPendingMapping] = useState<PendingColumnMapping | null>(null);
   const activeDate = fixedDate || reportDate;
   const existing = data.salesBySalesperson.some((row) => row.reportDate === activeDate) || data.salesByPlatform.some((row) => row.reportDate === activeDate);
   const totals = salesPreviewTotals(peoplePreview, platformPreview);
-  const hasValidPreview = (peoplePreview.length > 0 || platformPreview.length > 0) && errors.length === 0;
+  const hasValidPreview = (peoplePreview.length > 0 || platformPreview.length > 0) && errors.length === 0 && !pendingMapping;
 
   const reset = () => {
     setFile(null);
@@ -121,6 +126,7 @@ function SalesUploadCard({
     setOriginalPlatformPreview([]);
     setErrors([]);
     setMessage("");
+    setPendingMapping(null);
   };
 
   const preview = async () => {
@@ -128,10 +134,11 @@ function SalesUploadCard({
     const sourceFileId = createId();
     const isWorkbook = isWorkbookFile(file);
     setMessage(isWorkbook ? "جار قراءة الملف..." : "جاري تحليل الصورة بالذكاء الاصطناعي...");
+    setPendingMapping(null);
     try {
       const parsed = isWorkbook
-        ? await parseSalesWorkbook(file, activeDate, sourceFileId)
-        : await parseSalesImage(file, activeDate, sourceFileId);
+        ? await parseSalesWorkbook(file, activeDate, sourceFileId, data.columnMappings)
+        : await parseSalesImage(file, activeDate, sourceFileId, data.columnMappings);
       const correctedPeople = applySalespersonCorrections(parsed.people, data.ocrSalespersonCorrections);
       const correctedPlatforms = applyPageCorrections(parsed.platforms, data.ocrPageCorrections);
       setPeoplePreview(correctedPeople);
@@ -139,7 +146,12 @@ function SalesUploadCard({
       setOriginalPeoplePreview(correctedPeople);
       setOriginalPlatformPreview(correctedPlatforms);
       setErrors(parsed.errors);
-      setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
+      if (parsed.pendingMapping) {
+        setPendingMapping(parsed.pendingMapping);
+        setMessage("لم يتم التعرف على أعمدة الملف تلقائيًا. أكملي التعيين اليدوي أدناه.");
+      } else {
+        setMessage(parsed.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
+      }
     } catch (error) {
       setPeoplePreview([]);
       setPlatformPreview([]);
@@ -191,6 +203,25 @@ function SalesUploadCard({
     setIsSaving(false);
   };
 
+  const confirmMapping = async (fields: Partial<Record<MappableField, number>>) => {
+    if (!pendingMapping) return;
+    const result = applyManualColumnMapping(pendingMapping.rows, pendingMapping.headerRowIndex, fields, activeDate, createId());
+    const correctedPeople = applySalespersonCorrections(result.people, data.ocrSalespersonCorrections);
+    const correctedPlatforms = applyPageCorrections(result.platforms, data.ocrPageCorrections);
+    // Merge with whatever this file's other sheets already parsed successfully.
+    setPeoplePreview((previous) => [...previous, ...correctedPeople]);
+    setPlatformPreview((previous) => [...previous, ...correctedPlatforms]);
+    setOriginalPeoplePreview((previous) => [...previous, ...correctedPeople]);
+    setOriginalPlatformPreview((previous) => [...previous, ...correctedPlatforms]);
+    setErrors(result.errors);
+    setMessage(result.errors.length ? "تمت المعاينة مع أخطاء تحتاج مراجعة." : "Preview ready. راجعي البيانات قبل الحفظ.");
+
+    const signature = computeHeaderSignature(pendingMapping.headers);
+    const next = await recordColumnMapping(data, signature, fields, pendingMapping.gridLabel);
+    setData(next);
+    setPendingMapping(null);
+  };
+
   return (
     <section className="panel upload-card">
       <div className="section-title">
@@ -231,6 +262,9 @@ function SalesUploadCard({
         {message && <p className="status-line">{message}</p>}
       </div>
       {errors.length > 0 && <ErrorList errors={errors} />}
+      {pendingMapping && (
+        <MappingWizard headers={pendingMapping.headers} onCancel={() => setPendingMapping(null)} onConfirm={confirmMapping} />
+      )}
       {(peoplePreview.length > 0 || platformPreview.length > 0) && (
         <div className="preview-stack">
           <div className={totals.peopleOrders === totals.platformOrders && totals.peopleRevenue === totals.platformRevenue ? "notice success-note" : "notice warning-note"}>

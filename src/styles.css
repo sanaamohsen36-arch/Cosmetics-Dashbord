@@ -485,6 +485,19 @@ input[type="file"] {
   color: #fde68a;
 }
 
+.mapping-wizard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+
+.mapping-wizard-grid label {
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
 .error-note {
   border-color: rgba(248, 113, 113, 0.5);
   background: rgba(248, 113, 113, 0.08);

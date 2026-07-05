@@ -135,6 +135,21 @@ create table if not exists public.platforms (
   active boolean not null default true
 );
 
+-- Column-mapping wizard memory: a user-confirmed column layout for a sales
+-- upload, keyed by the exact header signature it was confirmed for, so the
+-- same file structure is recognized automatically next time instead of
+-- falling back to the wizard again.
+create table if not exists public.column_mappings (
+  id text primary key,
+  signature text not null unique,
+  mapping jsonb not null,
+  sheet_label text,
+  created_at timestamptz not null default now(),
+  usage_count integer not null default 0
+);
+
+create index if not exists idx_column_mappings_signature on public.column_mappings (signature);
+
 create table if not exists public.daily_summary (
   id text primary key,
   report_date date not null unique,
@@ -175,6 +190,7 @@ alter table public.ocr_page_corrections enable row level security;
 alter table public.ocr_salesperson_corrections enable row level security;
 alter table public.salespeople enable row level security;
 alter table public.platforms enable row level security;
+alter table public.column_mappings enable row level security;
 
 drop policy if exists "public_select_sales_raw_files" on public.sales_raw_files;
 drop policy if exists "public_write_sales_raw_files" on public.sales_raw_files;
@@ -235,6 +251,11 @@ drop policy if exists "public_select_platforms" on public.platforms;
 drop policy if exists "public_write_platforms" on public.platforms;
 create policy "public_select_platforms" on public.platforms for select using (true);
 create policy "public_write_platforms" on public.platforms for all using (true) with check (true);
+
+drop policy if exists "public_select_column_mappings" on public.column_mappings;
+drop policy if exists "public_write_column_mappings" on public.column_mappings;
+create policy "public_select_column_mappings" on public.column_mappings for select using (true);
+create policy "public_write_column_mappings" on public.column_mappings for all using (true) with check (true);
 
 do $$
 begin

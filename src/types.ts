@@ -141,6 +141,31 @@ export interface PlatformMaster {
   active: boolean;
 }
 
+// Column-mapping wizard: fields a user can manually assign to a column when
+// automatic alias-based detection can't recognize a workbook's headers.
+export type MappableField =
+  | "salespersonName"
+  | "pageName"
+  | "platform"
+  | "orders"
+  | "revenue"
+  | "morningOrders"
+  | "morningRevenue"
+  | "eveningOrders"
+  | "eveningRevenue";
+
+// A remembered mapping, keyed by the exact header layout it was confirmed
+// for, so the same file structure is recognized automatically next time
+// without asking the user to map it again.
+export interface ColumnMapping {
+  id: string;
+  signature: string;
+  fields: Partial<Record<MappableField, number>>;
+  sheetLabel: string;
+  createdAt: string;
+  usageCount: number;
+}
+
 export interface DateRange {
   from: string;
   to: string;
@@ -158,6 +183,7 @@ export interface AppData {
   ocrSalespersonCorrections: OcrSalespersonCorrection[];
   salespeople: SalespersonMaster[];
   platforms: PlatformMaster[];
+  columnMappings: ColumnMapping[];
 }
 
 export interface Kpis {

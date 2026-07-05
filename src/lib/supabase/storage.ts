@@ -3,6 +3,8 @@ import type {
   AdsRawFile,
   AdsRow,
   AppData,
+  ColumnMapping,
+  MappableField,
   OcrPageCorrection,
   OcrSalespersonCorrection,
   PlatformMaster,
@@ -59,7 +61,8 @@ export const emptyData = (): AppData => ({
     name,
     aliases: [name],
     active: true
-  }))
+  })),
+  columnMappings: []
 });
 
 export const getStorageMode = () => (isSupabaseConfigured ? "Supabase" : "Local fallback");
@@ -106,7 +109,8 @@ export const loadData = async (): Promise<AppData> => {
     ocrPageCorrections,
     ocrSalespersonCorrections,
     salespeople,
-    platforms
+    platforms,
+    columnMappings
   ] = await Promise.all([
     selectAll("sales_raw_files"),
     selectAll("sales_by_salesperson"),
@@ -118,7 +122,8 @@ export const loadData = async (): Promise<AppData> => {
     selectOptionalAll("ocr_page_corrections"),
     selectOptionalAll("ocr_salesperson_corrections"),
     selectOptionalAll("salespeople"),
-    selectOptionalAll("platforms")
+    selectOptionalAll("platforms"),
+    selectOptionalAll("column_mappings")
   ]);
 
   return {
@@ -132,7 +137,8 @@ export const loadData = async (): Promise<AppData> => {
     ocrPageCorrections: ocrPageCorrections.map(fromOcrPageCorrection),
     ocrSalespersonCorrections: ocrSalespersonCorrections.map(fromOcrSalespersonCorrection),
     salespeople: salespeople.map(fromSalespersonMaster),
-    platforms: mergeDefaultPlatformMasters(platforms.map(fromPlatformMaster))
+    platforms: mergeDefaultPlatformMasters(platforms.map(fromPlatformMaster)),
+    columnMappings: columnMappings.map(fromColumnMapping)
   };
 };
 
@@ -154,6 +160,7 @@ export const saveData = async (data: AppData) => {
   await insertOptionalRows("ocr_salesperson_corrections", data.ocrSalespersonCorrections.map(toOcrSalespersonCorrectionRow));
   await insertOptionalRows("salespeople", data.salespeople.map(toSalespersonMasterRow));
   await insertOptionalRows("platforms", data.platforms.map(toPlatformMasterRow));
+  await insertOptionalRows("column_mappings", data.columnMappings.map(toColumnMappingRow));
   await refreshDailySummary(data);
 };
 
@@ -255,6 +262,47 @@ export const recordPageCorrection = async (data: AppData, wrongValue: string, co
   return next;
 };
 
+// Column-mapping wizard memory: remembers a user-confirmed column layout
+// (keyed by header signature) so the same file structure is recognized
+// automatically next time instead of asking again. Additive/targeted only,
+// same pattern as the OCR corrections above.
+export const recordColumnMapping = async (
+  data: AppData,
+  signature: string,
+  fields: Partial<Record<MappableField, number>>,
+  sheetLabel: string
+): Promise<AppData> => {
+  const existing = data.columnMappings.find((item) => item.signature === signature);
+  const now = new Date().toISOString();
+
+  if (existing) {
+    const updated: ColumnMapping = { ...existing, fields, usageCount: existing.usageCount + 1 };
+    const next = {
+      ...data,
+      columnMappings: data.columnMappings.map((item) => (item.id === existing.id ? updated : item))
+    };
+    if (!supabase) {
+      saveLocalData(next);
+      return next;
+    }
+    const { error } = await supabase
+      .from("column_mappings")
+      .update({ mapping: updated.fields, usage_count: updated.usageCount })
+      .eq("id", existing.id);
+    if (error && !isMissingTableError(error)) throw error;
+    return next;
+  }
+
+  const created: ColumnMapping = { id: createId(), signature, fields, sheetLabel, createdAt: now, usageCount: 1 };
+  const next = { ...data, columnMappings: [...data.columnMappings, created] };
+  if (!supabase) {
+    saveLocalData(next);
+    return next;
+  }
+  await insertOptionalRows("column_mappings", [toColumnMappingRow(created)]);
+  return next;
+};
+
 export const subscribeToDataChanges = (onChange: () => void) => {
   if (!supabase) return () => undefined;
 
@@ -274,6 +322,7 @@ export const subscribeToDataChanges = (onChange: () => void) => {
     .on("postgres_changes", { event: "*", schema: "public", table: "ocr_salesperson_corrections" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "salespeople" }, onChange)
     .on("postgres_changes", { event: "*", schema: "public", table: "platforms" }, onChange)
+    .on("postgres_changes", { event: "*", schema: "public", table: "column_mappings" }, onChange)
     .subscribe();
 
   return () => {
@@ -302,7 +351,8 @@ const loadLocalData = (): AppData => {
       ocrPageCorrections: parsed.ocrPageCorrections ?? [],
       ocrSalespersonCorrections: parsed.ocrSalespersonCorrections ?? [],
       salespeople: parsed.salespeople ?? [],
-      platforms: mergeDefaultPlatformMasters(parsed.platforms ?? [])
+      platforms: mergeDefaultPlatformMasters(parsed.platforms ?? []),
+      columnMappings: parsed.columnMappings ?? []
     };
   } catch {
     return emptyData();
@@ -390,6 +440,7 @@ const deleteAllTables = async () => {
   await deleteOptionalAll("ocr_salesperson_corrections");
   await deleteOptionalAll("salespeople");
   await deleteOptionalAll("platforms");
+  await deleteOptionalAll("column_mappings");
 };
 
 const refreshDailySummary = async (data: AppData) => {
@@ -905,4 +956,22 @@ const toPlatformMasterRow = (row: PlatformMaster) => ({
   name: row.name,
   aliases: row.aliases,
   active: row.active
+});
+
+const fromColumnMapping = (row: any): ColumnMapping => ({
+  id: row.id,
+  signature: row.signature,
+  fields: row.mapping ?? {},
+  sheetLabel: row.sheet_label || "",
+  createdAt: row.created_at,
+  usageCount: Number(row.usage_count) || 0
+});
+
+const toColumnMappingRow = (row: ColumnMapping) => ({
+  id: row.id,
+  signature: row.signature,
+  mapping: row.fields,
+  sheet_label: row.sheetLabel,
+  created_at: row.createdAt,
+  usage_count: row.usageCount
 });

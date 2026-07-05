@@ -69,6 +69,58 @@ Done, on branch `claude/fix-dashboard-system`:
    `features/page-report/`) - section 8's "known gap" is still unresolved,
    this was a pure reorganization, not a product decision. Verified by build
    (identical bundle size) and by loading the running app.
+10. Fixed layout bugs found in the first Vercel preview review: a later CSS
+    block had forced `direction: ltr` on `.app-shell` (fighting the
+    `dir="rtl"` already on the root element) with a counter-rule flipping
+    only direct children back to `rtl` - this put the sidebar on the wrong
+    physical side and set up the container/content mismatch behind the
+    reported overlap. Removed both rules; fixed `.admin-box` using
+    `position: absolute` pinned to the sidebar's full height (overlapped the
+    nav list once there were 6 items) by switching to `margin-top: auto` in
+    the sidebar's flex column; added `min-width: 0` to `.panel`/
+    `.content-grid`/`.dashboard-stack` so wide report tables scroll inside
+    their own container instead of forcing their grid track to grow past
+    the sidebar. Verified visually with the preview tool (screenshots + DOM
+    snapshot) before and after.
+11. Added month-folder navigation to Sales Upload (`MonthFolderList` in
+    `lib/ui/`, new `monthKey`/`firstDayOfMonth`/`formatMonthLabel`/
+    `shiftMonthKey` helpers in `lib/date.ts`) - previously the day calendar
+    only ever showed whatever month `today` fell in, with no way to browse
+    to a different month at all.
+12. Restructured Ads Upload to platform-first navigation: the 6 ad platforms
+    (Facebook/Instagram/WhatsApp/TikTok/WhatsApp TikTok/Other) are now the
+    primary folder tabs; brand became a secondary dropdown selector within
+    the selected platform (previously brand was primary and platform was
+    buried in a dropdown after the calendar - backwards from the required
+    structure). Also gained the same month-folder navigation as Sales
+    Upload.
+13. Added a UI-only Roles & Permissions placeholder to Settings, listing the
+    six planned roles (section 13) each tagged "Planned - not active" - no
+    auth, no DB, no capability checks; purely informational per explicit
+    instruction not to start that implementation yet.
+14. Fixed the Sales Upload preview flow bug found in the second review:
+    when a workbook's headers didn't match any known alias,
+    `processGridIntoMaps()` silently returned empty results with zero
+    errors, so the UI showed a false "Preview ready" with no table and no
+    Save button. Root cause confirmed by testing a real generated `.xlsx`
+    through the running app. Fixed by pushing a descriptive error (listing
+    the headers actually found) instead of failing silently; changed the
+    Save button to only render on a genuinely valid, error-free preview
+    (not shown-disabled); added a Cancel/Reset button; expanded the totals
+    summary to include morning/evening breakdowns. Verified end-to-end via
+    the preview tool: parse → edit a cell → confirm the edit persists →
+    save only on explicit click → saved data matches the edit, not the
+    original parse.
+15. Replaced the "silent failure" from item 14 with the column-mapping
+    wizard described earlier in this section: a three-tier column
+    recognition system (learned mapping → alias detection → manual wizard
+    that teaches the system), a new `column_mappings` table, and
+    `features/sales-upload/MappingWizard.tsx`. Verified end-to-end via the
+    preview tool across three scenarios: alias-recognized file (unaffected,
+    regression-checked), unrecognized file (wizard shown, manual mapping
+    produces a correct preview, mapping persisted), and the same
+    unrecognized file uploaded a second time (auto-recognized via the
+    learned mapping, wizard not shown).
 
 Planned, not yet implemented (this document describes the target so all of
 this can proceed without re-litigating structure):
@@ -309,6 +361,57 @@ Intentionally provider-agnostic, as planned — it lives in
 these corrections via `lib/audit/logAction()` (section 14), since the audit
 log itself doesn't exist yet — this will be wired in when section 14 lands,
 per the sequencing already noted in History.
+
+**Done**: column-mapping wizard (see History). Column recognition is no
+longer purely alias-dependent — it's a three-tier lookup inside
+`processGridIntoMaps()` (`workbookParsers.ts`), checked in order for every
+sheet/grid, Excel or OCR alike:
+
+```
+Upload File
+  → Try automatic detection
+      1. Learned mapping? (exact header-signature match in
+         data.columnMappings) - use it directly, skip alias guessing.
+      2. Alias-based detection (detectPeopleColumns/detectPageColumns) -
+         if it finds a valid people or page table, proceed normally
+         (unchanged, original behavior).
+  → Neither matched: surface a "pendingMapping" (headers + raw rows) instead
+    of failing - the UI shows the Mapping Wizard
+    (features/sales-upload/MappingWizard.tsx) with the 9 fields from the
+    request (Salesperson, Page, Platform, Orders, Revenue, Morning/Evening
+    Orders/Revenue), pre-filled with nothing, listing every detected column
+    header as a choice.
+  → User confirms → applyManualColumnMapping() parses just that grid using
+    the manual assignment → recordColumnMapping() persists it keyed by
+    computeHeaderSignature(headers) (lib/mapping-memory/columnMapping.ts).
+  → Next upload with the same exact header layout: tier 1 matches
+    immediately, wizard never shown again.
+```
+
+- **Confidence is binary, not a fabricated percentage**: "high confidence"
+  means a learned mapping or alias detection actually found a valid table;
+  "low confidence" means neither did. A percentage score with no real
+  statistical grounding behind it would be less honest than this, so none is
+  shown.
+- **New table**: `column_mappings` (`supabase/schema.sql`) — `signature`
+  (unique), `mapping` (jsonb field→column-index), `sheet_label`,
+  `usage_count`. Same additive-only, optional-table pattern as
+  `ocr_page_corrections` (`selectOptionalAll`/`insertOptionalRows`, never
+  wiped by `reset-dashboard-data.sql` — it's learned configuration, not
+  operational sales/ads data).
+- **Unsplit Orders/Revenue convention**: if a file has one Orders/Revenue
+  pair instead of separate Morning/Evening columns, the wizard still lets
+  the user map just those two; the values are kept under the "morning"
+  bucket by convention so daily totals stay correct, and this is a
+  deliberate scope simplification, not a hidden bug — a truly split
+  morning/evening pair should be mapped to the four specific fields
+  instead.
+- Verified end-to-end with real generated `.xlsx` files via the preview
+  tool: unrecognized headers → wizard shown → manual mapping produces a
+  correct preview → mapping persisted; re-uploading the identical header
+  layout a second time skips the wizard entirely and auto-parses via the
+  learned mapping; a file with already-recognized aliases is unaffected
+  (regression-checked, no wizard shown).
 
 ---
 
