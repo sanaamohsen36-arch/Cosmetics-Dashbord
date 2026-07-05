@@ -25,7 +25,7 @@ import {
 } from "../../lib/metrics";
 import { chartTooltipStyle, integer, money, percent, ratio } from "../../lib/format";
 import { ChartPanel, KpiCard, SimpleTable } from "../../lib/ui";
-import { adsPlatformOptions, brandOptions } from "../../lib/constants";
+import { adsPlatformOptions } from "../../lib/constants";
 
 export function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
   const [salesperson, setSalesperson] = useState("all");
@@ -68,9 +68,11 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
           </label>
           <label>
             Brand
+            {/* Settings -> Manage Brands (data.brands) is the single source of
+                truth - never inferred from uploaded files/pages/salespeople. */}
             <select value={brand} onChange={(event) => setBrand(event.target.value)}>
               <option value="all">All</option>
-              {[...new Set([...brandOptions, ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)])].map((name) => <option key={name}>{name}</option>)}
+              {data.brands.filter((item) => item.active).map((item) => <option key={item.id}>{item.name}</option>)}
             </select>
           </label>
         </div>
@@ -177,10 +179,13 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
   );
 }
 
+// Brand filters both Sales and Ads from the same selected value - Sales rows
+// carry their own stored brandName (one upload = one brand, section 19),
+// never inferred from salesperson/page/platform.
 const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brand: string, adsPlatform: string): AppData => ({
   ...data,
-  salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson)),
-  salesByPlatform: data.salesByPlatform.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (platform === "all" || row.platformName === platform)),
+  salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson) && (brand === "all" || row.brandName === brand)),
+  salesByPlatform: data.salesByPlatform.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (platform === "all" || row.platformName === platform) && (brand === "all" || row.brandName === brand)),
   metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform)),
   tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform))
 });
