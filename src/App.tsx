@@ -156,7 +156,7 @@ export default function DashboardApp() {
         {hasPageAccess && page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
         {hasPageAccess && page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
         {hasPageAccess && page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
-        {hasPageAccess && page === "users" && <UsersPage />}
+        {hasPageAccess && page === "users" && <UsersPage currentUserId={profile?.id ?? null} />}
       </main>
     </div>
   );

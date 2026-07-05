@@ -45,11 +45,14 @@ export const updateUser = async (id: string, patch: { role?: Role; active?: bool
   if (!response.ok) throw await readError(response, "Failed to update user.");
 };
 
-export const sendPasswordReset = async (id: string): Promise<void> => {
-  const response = await fetch(`/api/admin/users/${id}/reset-password`, {
-    method: "POST",
+// Deletes the Supabase Auth user and their profile row - permanent, not a
+// disable. The Owner never sets or resets another user's password; that is
+// exclusively handled by the invite-email Set Password flow.
+export const deleteUser = async (id: string): Promise<void> => {
+  const response = await fetch(`/api/admin/users/${id}`, {
+    method: "DELETE",
     headers: await authHeader(),
     cache: "no-store"
   });
-  if (!response.ok) throw await readError(response, "Failed to send reset email.");
+  if (!response.ok) throw await readError(response, "Failed to delete user.");
 };

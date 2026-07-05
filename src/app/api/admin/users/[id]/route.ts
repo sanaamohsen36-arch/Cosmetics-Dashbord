@@ -52,3 +52,42 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     return NextResponse.json(body, { status });
   }
 }
+
+// Permanent delete - not a disable/ban. Removes the Supabase Auth user
+// entirely (frees the email for a future invite) and their profile row.
+export async function DELETE(request: Request, { params }: { params: { id: string } }) {
+  try {
+    const { userId: callerId } = await requireOwner(request);
+    const targetId = params.id;
+    if (targetId === callerId) throw new ApiError(400, "You cannot delete your own account.");
+
+    const serviceClient = getServiceClient();
+
+    const { data: targetProfile, error: targetError } = await serviceClient
+      .from("profiles")
+      .select("role")
+      .eq("id", targetId)
+      .maybeSingle();
+    if (targetError) throw new ApiError(500, targetError.message);
+
+    if (targetProfile?.role === "owner") {
+      const { count, error: countError } = await serviceClient
+        .from("profiles")
+        .select("id", { count: "exact", head: true })
+        .eq("role", "owner");
+      if (countError) throw new ApiError(500, countError.message);
+      if ((count ?? 0) <= 1) throw new ApiError(400, "Cannot delete the last remaining Owner.");
+    }
+
+    const { error: deleteAuthError } = await serviceClient.auth.admin.deleteUser(targetId);
+    if (deleteAuthError) throw new ApiError(500, deleteAuthError.message);
+
+    const { error: deleteProfileError } = await serviceClient.from("profiles").delete().eq("id", targetId);
+    if (deleteProfileError) throw new ApiError(500, deleteProfileError.message);
+
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    const { status, body } = handleApiError(error);
+    return NextResponse.json(body, { status });
+  }
+}
