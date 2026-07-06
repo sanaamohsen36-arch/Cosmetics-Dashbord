@@ -15,17 +15,18 @@ export class ApiError extends Error {
   }
 }
 
+// No pre-flight "is it configured" guess here - that generic message can
+// mask what's actually wrong (e.g. a key that's present but invalid/wrong-
+// project). createClient() is called unconditionally with whatever
+// process.env has right now; if the key is genuinely missing or malformed,
+// the Supabase SDK's own error - or the real error from the first API call
+// that uses this client - is what reaches the caller and, from there, the
+// Users page.
 export const getServiceClient = () => {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!supabaseUrl || !serviceRoleKey) {
-    console.error("getServiceClient: missing env", {
-      hasSupabaseUrl: Boolean(supabaseUrl),
-      hasServiceRoleKey: Boolean(serviceRoleKey)
-    });
-    throw new ApiError(500, "SUPABASE_SERVICE_ROLE_KEY is not configured on the server.");
-  }
-  return createClient(supabaseUrl, serviceRoleKey, {
+  console.error("getServiceClient env check", { hasSupabaseUrl: Boolean(supabaseUrl), hasServiceRoleKey: Boolean(serviceRoleKey) });
+  return createClient(supabaseUrl ?? "", serviceRoleKey ?? "", {
     auth: { autoRefreshToken: false, persistSession: false }
   });
 };
