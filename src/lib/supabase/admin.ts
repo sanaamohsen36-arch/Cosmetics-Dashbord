@@ -15,15 +15,15 @@ export class ApiError extends Error {
   }
 }
 
-const readRequiredEnv = (name: "NEXT_PUBLIC_SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY" | "NEXT_PUBLIC_SUPABASE_ANON_KEY") => {
-  const value = process.env[name]?.trim();
+const requireEnvValue = (name: string, rawValue: string | undefined) => {
+  const value = rawValue?.trim();
   if (!value) throw new ApiError(500, `Missing required server env: ${name}`);
   return value;
 };
 
 export const getServiceClient = () => {
-  const supabaseUrl = readRequiredEnv("NEXT_PUBLIC_SUPABASE_URL");
-  const serviceRoleKey = readRequiredEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseUrl = requireEnvValue("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const serviceRoleKey = requireEnvValue("SUPABASE_SERVICE_ROLE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY);
   console.error("getServiceClient env names", {
     urlEnv: "NEXT_PUBLIC_SUPABASE_URL",
     keyEnv: "SUPABASE_SERVICE_ROLE_KEY",
@@ -45,8 +45,8 @@ export const requireOwner = async (request: Request): Promise<{ userId: string }
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!token) throw new ApiError(401, "Missing session token.");
 
-  const supabaseUrl = readRequiredEnv("NEXT_PUBLIC_SUPABASE_URL");
-  const anonKey = readRequiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+  const supabaseUrl = requireEnvValue("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const anonKey = requireEnvValue("NEXT_PUBLIC_SUPABASE_ANON_KEY", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
 
   const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: `Bearer ${token}` } },
