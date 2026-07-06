@@ -15,17 +15,18 @@ export class ApiError extends Error {
   }
 }
 
+// No pre-flight "is it configured" guess here - that generic message can
+// mask what's actually wrong (e.g. a key that's present but invalid/wrong-
+// project). createClient() is called unconditionally with whatever
+// process.env has right now; if the key is genuinely missing or malformed,
+// the Supabase SDK's own error - or the real error from the first API call
+// that uses this client - is what reaches the caller and, from there, the
+// Users page.
 export const getServiceClient = () => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
-  console.error("getServiceClient env names", {
-    urlEnv: "NEXT_PUBLIC_SUPABASE_URL",
-    keyEnv: "SUPABASE_SERVICE_ROLE_KEY",
-    hasSupabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
-    hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
-    serviceRoleKeyPrefix: serviceRoleKey.slice(0, 6)
-  });
-  return createClient(supabaseUrl, serviceRoleKey, {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  console.error("getServiceClient env check", { hasSupabaseUrl: Boolean(supabaseUrl), hasServiceRoleKey: Boolean(serviceRoleKey) });
+  return createClient(supabaseUrl ?? "", serviceRoleKey ?? "", {
     auth: { autoRefreshToken: false, persistSession: false }
   });
 };
@@ -39,8 +40,9 @@ export const requireOwner = async (request: Request): Promise<{ userId: string }
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!token) throw new ApiError(401, "Missing session token.");
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) throw new ApiError(500, "Supabase is not configured.");
 
   const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: `Bearer ${token}` } },
@@ -69,13 +71,6 @@ export const requireOwner = async (request: Request): Promise<{ userId: string }
 
 export const handleApiError = (error: unknown) => {
   console.error("admin API error", error);
-  const diagnostic = {
-    env: {
-      hasSupabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
-      hasSupabaseAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
-      hasSupabaseServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
-    }
-  };
-  if (error instanceof ApiError) return { status: error.status, body: { error: error.message, diagnostic } };
-  return { status: 500, body: { error: error instanceof Error ? error.message : String(error), diagnostic } };
+  if (error instanceof ApiError) return { status: error.status, body: { error: error.message } };
+  return { status: 500, body: { error: error instanceof Error ? error.message : String(error) } };
 };
