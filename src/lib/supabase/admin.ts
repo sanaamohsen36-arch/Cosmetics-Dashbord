@@ -15,18 +15,23 @@ export class ApiError extends Error {
   }
 }
 
-// No pre-flight "is it configured" guess here - that generic message can
-// mask what's actually wrong (e.g. a key that's present but invalid/wrong-
-// project). createClient() is called unconditionally with whatever
-// process.env has right now; if the key is genuinely missing or malformed,
-// the Supabase SDK's own error - or the real error from the first API call
-// that uses this client - is what reaches the caller and, from there, the
-// Users page.
+const readRequiredEnv = (name: "NEXT_PUBLIC_SUPABASE_URL" | "SUPABASE_SERVICE_ROLE_KEY" | "NEXT_PUBLIC_SUPABASE_ANON_KEY") => {
+  const value = process.env[name]?.trim();
+  if (!value) throw new ApiError(500, `Missing required server env: ${name}`);
+  return value;
+};
+
 export const getServiceClient = () => {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  console.error("getServiceClient env check", { hasSupabaseUrl: Boolean(supabaseUrl), hasServiceRoleKey: Boolean(serviceRoleKey) });
-  return createClient(supabaseUrl ?? "", serviceRoleKey ?? "", {
+  const supabaseUrl = readRequiredEnv("NEXT_PUBLIC_SUPABASE_URL");
+  const serviceRoleKey = readRequiredEnv("SUPABASE_SERVICE_ROLE_KEY");
+  console.error("getServiceClient env names", {
+    urlEnv: "NEXT_PUBLIC_SUPABASE_URL",
+    keyEnv: "SUPABASE_SERVICE_ROLE_KEY",
+    hasSupabaseUrl: Boolean(supabaseUrl),
+    hasServiceRoleKey: Boolean(serviceRoleKey),
+    serviceRoleKeyPrefix: serviceRoleKey.slice(0, 6)
+  });
+  return createClient(supabaseUrl, serviceRoleKey, {
     auth: { autoRefreshToken: false, persistSession: false }
   });
 };
@@ -40,9 +45,8 @@ export const requireOwner = async (request: Request): Promise<{ userId: string }
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!token) throw new ApiError(401, "Missing session token.");
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!supabaseUrl || !anonKey) throw new ApiError(500, "Supabase is not configured.");
+  const supabaseUrl = readRequiredEnv("NEXT_PUBLIC_SUPABASE_URL");
+  const anonKey = readRequiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY");
 
   const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: `Bearer ${token}` } },
