@@ -25,6 +25,7 @@ import {
 } from "../../lib/supabase";
 import type { PendingColumnMapping } from "../../lib/workbookParsers";
 import { applyManualColumnMapping, parseSalesImage, parseSalesWorkbook } from "../../lib/workbookParsers";
+import { brandKey } from "../../lib/brands";
 import { MappingWizard } from "./MappingWizard";
 
 export function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
@@ -427,15 +428,15 @@ const syncMasterData = (data: AppData, people: SalesBySalesperson[], platforms: 
   const salespersonKeys = new Set(data.salespeople.map((row) => `${row.code}-${row.name}`));
   const platformKeys = new Set(data.platforms.map((row) => row.name.trim().toLowerCase()));
   const settingKeys = new Set(data.platformSettings.map((row) => row.platformName.trim().toLowerCase()));
-  const brandKeys = new Set(data.brands.map((row) => row.name.trim().toLowerCase()));
+  const brandKeys = new Set(data.brands.map((row) => brandKey(row.name)));
   return {
     ...data,
     brands: [
       ...data.brands,
       ...platforms
         .filter((row) => {
-          const key = row.platformName.trim().toLowerCase();
-          if (!row.platformName || brandKeys.has(key)) return false;
+          const key = brandKey(row.platformName);
+          if (!row.platformName || !key || brandKeys.has(key)) return false;
           brandKeys.add(key);
           return true;
         })

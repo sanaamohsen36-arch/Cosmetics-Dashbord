@@ -7,7 +7,7 @@ import { createId } from "../../lib/supabase";
 import { Badge } from "../../lib/ui";
 import { isAuthEnabled, listProfiles, updateProfileRole } from "../../lib/auth";
 import { allRoles, can, effectiveRole, roleLabels } from "../../lib/permissions";
-import { getEffectiveBrandNames } from "../../lib/brands";
+import { getEffectiveBrandNames, mergeDuplicateBrands } from "../../lib/brands";
 import { listAuditLog } from "../../lib/audit";
 import { listHealthStatus } from "../../lib/health";
 import { listBackupRuns } from "../../lib/backup";
@@ -24,7 +24,20 @@ export function SettingsPage({
   const [platformName, setPlatformName] = useState("");
   const [salespersonName, setSalespersonName] = useState("");
   const [salespersonCode, setSalespersonCode] = useState("");
+  const [brandCleanupMessage, setBrandCleanupMessage] = useState("");
   const role = effectiveRole(profile, isAuthEnabled);
+
+  // One-time cleanup (idempotent, safe to run more than once): collapses
+  // existing duplicate Brands (different Arabic/case/whitsapp spellings of
+  // the same name) into one canonical spelling, and rewrites every
+  // Sales/Ads row that referenced an old spelling to point at it.
+  const runBrandCleanup = async () => {
+    const before = getEffectiveBrandNames(data).length;
+    const cleaned = mergeDuplicateBrands(data);
+    await commitData(cleaned);
+    const after = getEffectiveBrandNames(cleaned).length;
+    setBrandCleanupMessage(before === after ? "لا يوجد Brands مكررة." : `تم دمج ${before - after} Brand مكرر.`);
+  };
 
   const addPlatform = async () => {
     if (!platformName.trim()) return;
@@ -76,7 +89,9 @@ export function SettingsPage({
       </section>
       <section className="panel">
         <h2>Brands</h2>
-        <p className="status-line">تُقرأ Brands تلقائيًا من كل اسم صفحة (Page) فريد داخل تقارير المبيعات - لا توجد إدارة يدوية. كل Page هو Brand مستقل بذاته.</p>
+        <p className="status-line">تُقرأ Brands تلقائيًا من كل اسم صفحة (Page) فريد داخل تقارير المبيعات - لا توجد إدارة يدوية. كل Page هو Brand مستقل بذاته. الأسماء المتشابهة (مسافات، همزة، ة/ه، واتساب) تُدمج تلقائيًا.</p>
+        <button className="ghost" onClick={runBrandCleanup}>Run Brand Cleanup</button>
+        {brandCleanupMessage && <p className="status-line">{brandCleanupMessage}</p>}
         <ul className="settings-list">{getEffectiveBrandNames(data).map((name) => <li key={name}>{name}</li>)}</ul>
       </section>
       <section className="panel wide">
