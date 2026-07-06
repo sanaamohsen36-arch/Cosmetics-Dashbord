@@ -25,7 +25,7 @@ import {
 } from "../../lib/metrics";
 import { chartTooltipStyle, integer, money, percent, ratio } from "../../lib/format";
 import { ChartPanel, KpiCard, SimpleTable } from "../../lib/ui";
-import { getEffectiveBrandNames } from "../../lib/brands";
+import { brandKey, getEffectiveBrandNames } from "../../lib/brands";
 
 // Section 19 revision: Brand is the only business entity - each Sales Page
 // IS a Brand, and Ads files are tagged with that same Brand at upload time.
@@ -65,9 +65,11 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
           </label>
           <label>
             Page / Platform
+            {/* Same underlying field as Brand now - deduplicated the same
+                way so a spelling variant doesn't show as a second option. */}
             <select value={platform} onChange={(event) => setPlatform(event.target.value)}>
               <option value="all">All</option>
-              {[...new Set(data.salesByPlatform.map((row) => row.platformName).filter(Boolean))].map((name) => <option key={name}>{name}</option>)}
+              {getEffectiveBrandNames(data).map((name) => <option key={name}>{name}</option>)}
             </select>
           </label>
           <label>
@@ -191,10 +193,23 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
 // fabricating a link that doesn't exist. Ads is filtered only by Brand
 // (the value selected at Ads Upload time) + Date - no more Ads-platform
 // business filter.
-const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brand: string): AppData => ({
-  ...data,
-  salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson)),
-  salesByPlatform: data.salesByPlatform.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (platform === "all" || row.platformName === platform) && (brand === "all" || row.platformName === brand)),
-  metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand)),
-  tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand))
-});
+const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brand: string): AppData => {
+  // Compared by brandKey, not exact string equality, so a spelling variant
+  // (ة/ه, أ/إ/آ, case, واتس/واتساب...) of the selected Brand/Page still
+  // matches instead of silently returning zero.
+  const platformKeyToMatch = platform === "all" ? null : brandKey(platform);
+  const brandKeyToMatch = brand === "all" ? null : brandKey(brand);
+  return {
+    ...data,
+    salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson)),
+    salesByPlatform: data.salesByPlatform.filter(
+      (row) =>
+        row.reportDate >= range.from &&
+        row.reportDate <= range.to &&
+        (!platformKeyToMatch || brandKey(row.platformName) === platformKeyToMatch) &&
+        (!brandKeyToMatch || brandKey(row.platformName) === brandKeyToMatch)
+    ),
+    metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (!brandKeyToMatch || brandKey(row.salesPlatformName) === brandKeyToMatch)),
+    tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (!brandKeyToMatch || brandKey(row.salesPlatformName) === brandKeyToMatch))
+  };
+};
