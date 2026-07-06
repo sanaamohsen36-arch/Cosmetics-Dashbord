@@ -4,7 +4,12 @@ import "../styles.css";
 
 export const metadata: Metadata = {
   title: "تقارير المبيعات والإعلانات",
-  description: "Shared sales and ads dashboard powered by Supabase"
+  description: "Shared sales and ads dashboard powered by Supabase",
+  icons: {
+    icon: "/company-logo.svg",
+    shortcut: "/company-logo.svg",
+    apple: "/company-logo.svg"
+  }
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {

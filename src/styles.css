@@ -115,6 +115,15 @@ input[type="file"] {
   font-weight: 900;
 }
 
+.brand-logo {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  object-fit: contain;
+  background: linear-gradient(135deg, #38bdf8, #34d399);
+  box-shadow: 0 12px 26px rgba(37, 99, 235, 0.2);
+}
+
 .brand strong,
 .brand small {
   display: block;
@@ -1255,6 +1264,13 @@ body {
   background: linear-gradient(135deg, var(--blue-500), #5eead4);
   color: #fff;
   box-shadow: 0 12px 26px rgba(37, 99, 235, 0.28);
+}
+
+.brand-logo {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  padding: 5px;
 }
 
 .brand strong {

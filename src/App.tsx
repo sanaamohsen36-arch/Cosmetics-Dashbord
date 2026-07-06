@@ -107,7 +107,7 @@ export default function DashboardApp() {
     <div className={`app-shell ${theme}`} dir="rtl">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">DR</div>
+          <img className="brand-logo" src="/company-logo.svg" alt="Sales + Ads BI" />
           <div>
             <strong>تقارير البيع</strong>
             <small>Sales + Ads BI</small>
@@ -289,11 +289,16 @@ function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: App
 }
 
 function AdsFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
-  const knownBrands = [...new Set([...brandOptions, ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)])];
+  const knownBrands = getNormalizedBrands(data);
   const [brand, setBrand] = useState(knownBrands[0] || brandOptions[0]);
   const [selectedDate, setSelectedDate] = useState(today);
   const [platformName, setPlatformName] = useState(adsPlatformOptions[0]);
   const [statusMessage, setStatusMessage] = useState("");
+  useEffect(() => {
+    if (knownBrands.length && !knownBrands.some((item) => normalizedName(item) === normalizedName(brand))) {
+      setBrand(knownBrands[0]);
+    }
+  }, [brand, knownBrands]);
   const uploadedDates = new Set(data.adsRawFiles.filter((file) => file.salesPlatformName === brand).map((file) => file.reportDate));
   const filesForSelection = data.adsRawFiles.filter(
     (file) => file.salesPlatformName === brand && file.reportDate === selectedDate && file.adAccountName === platformName
@@ -631,6 +636,7 @@ function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
   const people = useMemo(() => aggregatePeople(filterPeople(scopedData, range)), [scopedData, range]);
   const platforms = useMemo(() => aggregatePlatforms(filterPlatforms(scopedData, range)), [scopedData, range]);
   const adsPlatformChart = useMemo(() => aggregateAdsByPlatform(filterAds(scopedData, range)), [scopedData, range]);
+  const normalizedBrands = useMemo(() => getNormalizedBrands(data), [data]);
 
   return (
     <div className="dashboard-stack">
@@ -661,7 +667,7 @@ function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
             Brand
             <select value={brand} onChange={(event) => setBrand(event.target.value)}>
               <option value="all">All</option>
-              {[...new Set([...brandOptions, ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)])].map((name) => <option key={name}>{name}</option>)}
+              {normalizedBrands.map((name) => <option key={name}>{name}</option>)}
             </select>
           </label>
         </div>
@@ -1306,9 +1312,38 @@ const scopeData = (data: AppData, range: DateRange, salesperson: string, platfor
   ...data,
   salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson)),
   salesByPlatform: data.salesByPlatform.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (platform === "all" || row.platformName === platform)),
-  metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform)),
-  tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform))
+  metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || normalizedName(row.salesPlatformName) === normalizedName(brand)) && (adsPlatform === "all" || row.adAccountName === adsPlatform)),
+  tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || normalizedName(row.salesPlatformName) === normalizedName(brand)) && (adsPlatform === "all" || row.adAccountName === adsPlatform))
 });
+
+const getNormalizedBrands = (data: AppData) =>
+  dedupeDisplayNames([
+    ...brandOptions,
+    ...data.platforms.map((item) => item.name),
+    ...data.platformSettings.map((item) => item.platformName),
+    ...data.salesByPlatform.filter((row) => !isTotalName(row.platformName)).map((row) => row.platformName),
+    ...data.adsRawFiles.map((file) => file.salesPlatformName)
+  ]);
+
+const dedupeDisplayNames = (names: Array<string | undefined>) => {
+  const seen = new Set<string>();
+  return names
+    .map((name) => (name || "").trim())
+    .filter((name) => {
+      const key = normalizedName(name);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const normalizedName = (value: string) =>
+  value
+    .replace(/[إأآ]/g, "ا")
+    .replace(/[ة]/g, "ه")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
 
 const normalSalesPlatforms = (rows: SalesByPlatform[]) =>
   rows.filter((row) => (row.rowType ?? (isTotalName(row.platformName) ? "subtotal" : "normal")) === "normal");

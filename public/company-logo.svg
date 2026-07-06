@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Sales BI logo">
+  <defs>
+    <linearGradient id="g" x1="10" y1="8" x2="54" y2="58" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#14b8a6"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="#071018"/>
+  <path d="M17 43.5h30" stroke="#e5edf5" stroke-width="4" stroke-linecap="round"/>
+  <rect x="19" y="31" width="7" height="13" rx="3" fill="url(#g)"/>
+  <rect x="29" y="22" width="7" height="22" rx="3" fill="url(#g)"/>
+  <rect x="39" y="15" width="7" height="29" rx="3" fill="url(#g)"/>
+  <path d="M18 23c8-10 18-11 29-5" fill="none" stroke="#e5edf5" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="49" cy="18" r="4" fill="#38bdf8"/>
+</svg>
