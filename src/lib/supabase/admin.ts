@@ -15,20 +15,14 @@ export class ApiError extends Error {
   }
 }
 
-const requireEnvValue = (name: string, rawValue: string | undefined) => {
-  const value = rawValue?.trim();
-  if (!value) throw new ApiError(500, `Missing required server env: ${name}`);
-  return value;
-};
-
 export const getServiceClient = () => {
-  const supabaseUrl = requireEnvValue("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
-  const serviceRoleKey = requireEnvValue("SUPABASE_SERVICE_ROLE_KEY", process.env.SUPABASE_SERVICE_ROLE_KEY);
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
   console.error("getServiceClient env names", {
     urlEnv: "NEXT_PUBLIC_SUPABASE_URL",
     keyEnv: "SUPABASE_SERVICE_ROLE_KEY",
-    hasSupabaseUrl: Boolean(supabaseUrl),
-    hasServiceRoleKey: Boolean(serviceRoleKey),
+    hasSupabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
+    hasServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
     serviceRoleKeyPrefix: serviceRoleKey.slice(0, 6)
   });
   return createClient(supabaseUrl, serviceRoleKey, {
@@ -45,8 +39,8 @@ export const requireOwner = async (request: Request): Promise<{ userId: string }
   const token = authHeader.replace(/^Bearer\s+/i, "").trim();
   if (!token) throw new ApiError(401, "Missing session token.");
 
-  const supabaseUrl = requireEnvValue("NEXT_PUBLIC_SUPABASE_URL", process.env.NEXT_PUBLIC_SUPABASE_URL);
-  const anonKey = requireEnvValue("NEXT_PUBLIC_SUPABASE_ANON_KEY", process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
   const callerClient = createClient(supabaseUrl, anonKey, {
     global: { headers: { Authorization: `Bearer ${token}` } },
@@ -75,6 +69,13 @@ export const requireOwner = async (request: Request): Promise<{ userId: string }
 
 export const handleApiError = (error: unknown) => {
   console.error("admin API error", error);
-  if (error instanceof ApiError) return { status: error.status, body: { error: error.message } };
-  return { status: 500, body: { error: error instanceof Error ? error.message : String(error) } };
+  const diagnostic = {
+    env: {
+      hasSupabaseUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
+      hasSupabaseAnonKey: Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY),
+      hasSupabaseServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY)
+    }
+  };
+  if (error instanceof ApiError) return { status: error.status, body: { error: error.message, diagnostic } };
+  return { status: 500, body: { error: error instanceof Error ? error.message : String(error), diagnostic } };
 };
