@@ -12,6 +12,17 @@ const VALID_ROLES = ["owner", "admin", "marketing_manager", "media_buyer", "sale
 
 export async function GET(request: Request) {
   try {
+    // Diagnostic only (per explicit request): proves what this exact
+    // deployed instance's process.env actually holds for the key passed to
+    // createClient(), before any auth check - never logs the full value.
+    const diagKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+    console.error("[users-api-diagnostic] GET /api/admin/users", {
+      vercelEnv: process.env.VERCEL_ENV,
+      hasUrl: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL),
+      serviceRoleKeyLength: diagKey.length,
+      serviceRoleKeyPrefix: diagKey.slice(0, 6),
+      serviceRoleKeySuffix: diagKey.slice(-4)
+    });
     await requireOwner(request);
     const serviceClient = getServiceClient();
 
