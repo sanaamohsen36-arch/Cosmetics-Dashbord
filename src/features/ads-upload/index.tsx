@@ -4,34 +4,28 @@ import { useState } from "react";
 import { FileSpreadsheet, FolderOpen, Save, Trash2 } from "lucide-react";
 import type { AdsPlatform, AdsRawFile, AdsRow, AppData } from "../../types";
 import { firstDayOfMonth, monthKey, today } from "../../lib/date";
-import { adsPlatformOptions, brandOptions } from "../../lib/constants";
 import { ErrorList, CalendarMonth, MonthFolderList, SimpleTable } from "../../lib/ui";
 import { createId, deleteRawFile, saveAdsUpload } from "../../lib/supabase";
 import { parseAdsWorkbook } from "../../lib/workbookParsers";
+import { getEffectiveBrandNames } from "../../lib/brands";
 
+// Section 19 revision: Brand is the only business entity now - no parent
+// Brand with Facebook/Instagram/TikTok children. The uploader picks ONE
+// Brand (same list Sales pages populate), then uploads however many Ads
+// files belong to it; Meta vs TikTok is only which column template to
+// parse with, not a folder/dashboard structure.
 export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
-  // Platform is the primary folder structure (Facebook Ads, Instagram Ads,
-  // WhatsApp Ads, TikTok Ads, WhatsApp TikTok Ads, Other); brand is a
-  // secondary selector within a platform, not the top-level nav.
-  const [platformName, setPlatformName] = useState(adsPlatformOptions[0]);
-  const knownBrands = [
-    ...new Set([
-      ...data.brands.filter((item) => item.active).map((item) => item.name),
-      ...brandOptions,
-      ...data.adsRawFiles.map((file) => file.salesPlatformName).filter(Boolean)
-    ])
-  ];
-  const [brand, setBrand] = useState(knownBrands[0] || brandOptions[0]);
+  const knownBrands = getEffectiveBrandNames(data);
+  const [brand, setBrand] = useState(knownBrands[0] || "");
+  const [adsPlatform, setAdsPlatform] = useState<AdsPlatform>("Meta");
   const [selectedDate, setSelectedDate] = useState(today);
   const [statusMessage, setStatusMessage] = useState("");
 
-  const filesForPlatformAndBrand = data.adsRawFiles.filter(
-    (file) => file.adAccountName === platformName && file.salesPlatformName === brand
-  );
-  const uploadedDates = new Set(filesForPlatformAndBrand.map((file) => file.reportDate));
-  const monthsWithUploads = new Set(filesForPlatformAndBrand.map((file) => monthKey(file.reportDate)));
+  const filesForBrand = data.adsRawFiles.filter((file) => file.salesPlatformName === brand);
+  const uploadedDates = new Set(filesForBrand.map((file) => file.reportDate));
+  const monthsWithUploads = new Set(filesForBrand.map((file) => monthKey(file.reportDate)));
   const selectedMonth = monthKey(selectedDate);
-  const filesForSelection = filesForPlatformAndBrand.filter((file) => file.reportDate === selectedDate);
+  const filesForSelection = filesForBrand.filter((file) => file.reportDate === selectedDate);
   const deleteAdsFile = async (fileId: string) => {
     const confirmed = window.confirm("Delete this ads file and only its imported rows?");
     if (!confirmed) return;
@@ -47,16 +41,9 @@ export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data
           <FolderOpen />
           <div>
             <h2>Ads / الإعلانات</h2>
-            <p>اختاري منصة الإعلان أولاً، ثم Brand، ثم الشهر واليوم. يمكن رفع أكثر من ملف CSV لنفس اليوم.</p>
+            <p>اختاري Brand أولاً، ثم الشهر واليوم. يمكن رفع أكثر من ملف إعلانات لنفس اليوم لنفس الـ Brand.</p>
           </div>
         </div>
-        <div className="folder-tabs">
-          {adsPlatformOptions.map((item) => (
-            <button key={item} className={platformName === item ? "primary" : ""} onClick={() => setPlatformName(item)}>{item}</button>
-          ))}
-        </div>
-      </section>
-      <section className="panel">
         <div className="form-row">
           <label>
             Brand
@@ -72,13 +59,13 @@ export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data
         />
       </section>
       <section className="panel">
-        <h2>{platformName} — {brand}</h2>
+        <h2>{brand}</h2>
         <CalendarMonth selectedDate={selectedDate} uploadedDates={uploadedDates} onSelect={setSelectedDate} />
       </section>
       <section className="panel">
         {filesForSelection.length ? (
           <div className="notice success-note">
-            <strong>Uploaded for {brand} / {selectedDate} / {platformName}</strong>
+            <strong>Uploaded for {brand} / {selectedDate}</strong>
             {filesForSelection.map((file) => (
               <span key={file.id} className="file-row">
                 {file.fileName} - {new Date(file.uploadedAt).toLocaleString("ar-EG")}
@@ -90,10 +77,19 @@ export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data
             ))}
           </div>
         ) : (
-          <p className="status-line">لا توجد بيانات لهذه المنصة في اليوم المختار.</p>
+          <p className="status-line">لا توجد بيانات لهذا الـ Brand في اليوم المختار.</p>
         )}
         {statusMessage && <p className="status-line">{statusMessage}</p>}
-        <AdsUploadCard data={data} setData={setData} platform={adsPlatformKind(platformName)} fixedDate={selectedDate} brandName={brand} selectedAdsPlatform={platformName} />
+        <div className="form-row">
+          <label>
+            File type (لتحديد الأعمدة الصحيحة فقط)
+            <select value={adsPlatform} onChange={(event) => setAdsPlatform(event.target.value as AdsPlatform)}>
+              <option value="Meta">Meta (Facebook / Instagram)</option>
+              <option value="TikTok">TikTok</option>
+            </select>
+          </label>
+        </div>
+        <AdsUploadCard data={data} setData={setData} platform={adsPlatform} fixedDate={selectedDate} brandName={brand} />
       </section>
     </div>
   );
@@ -104,15 +100,13 @@ function AdsUploadCard({
   setData,
   platform,
   fixedDate,
-  brandName = "عام",
-  selectedAdsPlatform = platform
+  brandName = "عام"
 }: {
   data: AppData;
   setData: (data: AppData) => void;
   platform: AdsPlatform;
   fixedDate?: string;
   brandName?: string;
-  selectedAdsPlatform?: string;
 }) {
   // Multiple files can be selected together (one platform can have multiple
   // ad accounts, each exported to its own file) - all are parsed and their
@@ -136,7 +130,7 @@ function AdsUploadCard({
         ...parsed.rows.map((row) => ({
           ...row,
           salesPlatformName: brandName,
-          adAccountName: selectedAdsPlatform,
+          adAccountName: platform,
           // Resolve the "results" style column (messages/leads/purchases) once, here,
           // so the preview table shows the real value and is editable like any other field.
           leads: Number(row.resultsCount) || row.leads || row.purchases || 0,
@@ -164,7 +158,7 @@ function AdsUploadCard({
       reportDate: activeDate,
       adsPlatform: platform,
       salesPlatformName: brandName,
-      adAccountName: selectedAdsPlatform,
+      adAccountName: platform,
       parsingStatus: "success",
       createdAt: now,
       version: 1,
@@ -178,11 +172,11 @@ function AdsUploadCard({
       sourceFileId,
       createdAt: now,
       salesPlatformName: brandName,
-      adAccountName: selectedAdsPlatform
+      adAccountName: platform
     }));
     const next = await saveAdsUpload(data, rawFile, normalizedRows, platform, "merge");
     setData(next);
-    setMessage(`تم حفظ بيانات ${selectedAdsPlatform} (${files.length} ملف) بدون حذف الملفات الأخرى لنفس اليوم.`);
+    setMessage(`تم حفظ بيانات ${platform} (${files.length} ملف) بدون حذف الملفات الأخرى لنفس اليوم.`);
     setIsSaving(false);
   };
 
@@ -191,7 +185,7 @@ function AdsUploadCard({
       <div className="section-title">
         <FileSpreadsheet />
         <div>
-          <h2>{selectedAdsPlatform} Upload</h2>
+          <h2>{platform} Ads Upload</h2>
           <p>{brandName} / {activeDate} - Excel أو CSV مع معاينة قبل الحفظ.</p>
         </div>
       </div>
