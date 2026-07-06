@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Archive, History, Lock, Trash2 } from "lucide-react";
+import { Activity, Archive, History, Lock } from "lucide-react";
 import type { AppData, BackupRun, Profile, Role, SystemHealthStatus, AuditLogEntry } from "../../types";
 import { createId } from "../../lib/supabase";
 import { Badge } from "../../lib/ui";
 import { isAuthEnabled, listProfiles, updateProfileRole } from "../../lib/auth";
 import { allRoles, can, effectiveRole, roleLabels } from "../../lib/permissions";
+import { getEffectiveBrandNames } from "../../lib/brands";
 import { listAuditLog } from "../../lib/audit";
 import { listHealthStatus } from "../../lib/health";
 import { listBackupRuns } from "../../lib/backup";
@@ -23,7 +24,6 @@ export function SettingsPage({
   const [platformName, setPlatformName] = useState("");
   const [salespersonName, setSalespersonName] = useState("");
   const [salespersonCode, setSalespersonCode] = useState("");
-  const [brandName, setBrandName] = useState("");
   const role = effectiveRole(profile, isAuthEnabled);
 
   const addPlatform = async () => {
@@ -44,21 +44,6 @@ export function SettingsPage({
     });
     setSalespersonName("");
     setSalespersonCode("");
-  };
-
-  const addBrand = async () => {
-    if (!brandName.trim()) return;
-    await commitData({
-      ...data,
-      brands: [...data.brands, { id: createId(), name: brandName.trim(), active: true }]
-    });
-    setBrandName("");
-  };
-
-  const deleteBrand = async (id: string) => {
-    const confirmed = window.confirm("Remove this brand from every Brand selector?");
-    if (!confirmed) return;
-    await commitData({ ...data, brands: data.brands.filter((item) => item.id !== id) });
   };
 
   return (
@@ -90,26 +75,9 @@ export function SettingsPage({
         <ul className="settings-list">{data.salespeople.map((item) => <li key={item.id}>{item.name} {item.code ? `(${item.code})` : ""}</li>)}</ul>
       </section>
       <section className="panel">
-        <h2>Manage brands</h2>
-        <p className="status-line">كل رفع (Sales أو Ads) ينتمي لـ Brand واحد فقط - لا يمكن لملف واحد أن يخص أكثر من Brand.</p>
-        <div className="form-row">
-          <label>
-            Brand name
-            <input value={brandName} onChange={(event) => setBrandName(event.target.value)} />
-          </label>
-          <button className="primary" onClick={addBrand}>Add</button>
-        </div>
-        <ul className="settings-list">
-          {data.brands.map((item) => (
-            <li key={item.id} className="file-row">
-              {item.name}
-              <button className="ghost" onClick={() => deleteBrand(item.id)}>
-                <Trash2 size={16} />
-                Delete
-              </button>
-            </li>
-          ))}
-        </ul>
+        <h2>Brands</h2>
+        <p className="status-line">تُقرأ Brands تلقائيًا من كل اسم صفحة (Page) فريد داخل تقارير المبيعات - لا توجد إدارة يدوية. كل Page هو Brand مستقل بذاته.</p>
+        <ul className="settings-list">{getEffectiveBrandNames(data).map((name) => <li key={name}>{name}</li>)}</ul>
       </section>
       <section className="panel wide">
         <h2>Ads platform mapping</h2>

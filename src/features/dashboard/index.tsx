@@ -25,20 +25,26 @@ import {
 } from "../../lib/metrics";
 import { chartTooltipStyle, integer, money, percent, ratio } from "../../lib/format";
 import { ChartPanel, KpiCard, SimpleTable } from "../../lib/ui";
-import { adsPlatformOptions } from "../../lib/constants";
+import { getEffectiveBrandNames } from "../../lib/brands";
 
+// Section 19 revision: Brand is the only business entity - each Sales Page
+// IS a Brand, and Ads files are tagged with that same Brand at upload time.
+// There is no more Facebook/Instagram/TikTok "Ads platform" business filter;
+// Meta vs TikTok is only an internal parsing detail now.
 export function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
   const [salesperson, setSalesperson] = useState("all");
   const [platform, setPlatform] = useState("all");
   const [brand, setBrand] = useState("all");
-  const [adsPlatform, setAdsPlatform] = useState("all");
-  const scopedData = useMemo(() => scopeData(data, range, salesperson, platform, brand, adsPlatform), [data, range, salesperson, platform, brand, adsPlatform]);
-  // A specific Page/Platform is selected -> source the headline totals from
+  const scopedData = useMemo(() => scopeData(data, range, salesperson, platform, brand), [data, range, salesperson, platform, brand]);
+  // Brand or Page/Platform selected -> source the headline totals from
   // salesByPlatform (that page's own stored figures) instead of
-  // salesBySalesperson, since a salesperson row has no page attribution to
-  // filter by - see calculateKpis' comment for why these are mutually
-  // exclusive axes, not a bug.
-  const kpis = useMemo(() => calculateKpis(scopedData, range, { useSalesByPlatformForTotals: platform !== "all" }), [scopedData, range, platform]);
+  // salesBySalesperson, since a salesperson row has no page/brand
+  // attribution to filter by - see calculateKpis' comment for why these are
+  // mutually exclusive axes, not a bug.
+  const kpis = useMemo(
+    () => calculateKpis(scopedData, range, { useSalesByPlatformForTotals: brand !== "all" || platform !== "all" }),
+    [scopedData, range, brand, platform]
+  );
   const resultCount = useMemo(() => filterAds(scopedData, range).reduce((sum, row) => sum + (Number(row.resultsCount) || Number(row.leads) || Number(row.purchases) || 0), 0), [scopedData, range]);
   const costPerResult = resultCount ? kpis.totalAdsSpend / resultCount : null;
   const trend = useMemo(() => dailyTrend(filterPeople(scopedData, range), filterAds(scopedData, range)), [scopedData, range]);
@@ -65,19 +71,12 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
             </select>
           </label>
           <label>
-            Ads platform
-            <select value={adsPlatform} onChange={(event) => setAdsPlatform(event.target.value)}>
-              <option value="all">All</option>
-              {[...new Set([...adsPlatformOptions, ...data.adsRawFiles.map((file) => file.adAccountName || "").filter(Boolean)])].map((name) => <option key={name}>{name}</option>)}
-            </select>
-          </label>
-          <label>
             Brand
-            {/* Settings -> Manage Brands (data.brands) is the single source of
-                truth - never inferred from uploaded files/pages/salespeople. */}
+            {/* Every unique Page name from Sales IS a Brand now - no manual
+                management, derived from Sales data (lib/brands.ts). */}
             <select value={brand} onChange={(event) => setBrand(event.target.value)}>
               <option value="all">All</option>
-              {data.brands.filter((item) => item.active).map((item) => <option key={item.id}>{item.name}</option>)}
+              {getEffectiveBrandNames(data).map((name) => <option key={name}>{name}</option>)}
             </select>
           </label>
         </div>
@@ -184,13 +183,18 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
   );
 }
 
-// Brand filters both Sales and Ads from the same selected value - Sales rows
-// carry their own stored brandName (one upload = one brand, section 19),
-// never inferred from salesperson/page/platform.
-const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brand: string, adsPlatform: string): AppData => ({
+// Section 19 revision: Brand IS the Page name, so both Brand and Page/
+// Platform filter salesByPlatform by the same field (platformName).
+// salesBySalesperson has no page/brand attribution at all in the source
+// file (Salespeople_Input and Pages_Input are independent sheets), so it is
+// only ever filtered by Salesperson + Date - never by Brand, never
+// fabricating a link that doesn't exist. Ads is filtered only by Brand
+// (the value selected at Ads Upload time) + Date - no more Ads-platform
+// business filter.
+const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brand: string): AppData => ({
   ...data,
-  salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson) && (brand === "all" || row.brandName === brand)),
-  salesByPlatform: data.salesByPlatform.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (platform === "all" || row.platformName === platform) && (brand === "all" || row.brandName === brand)),
-  metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform)),
-  tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand) && (adsPlatform === "all" || row.adAccountName === adsPlatform))
+  salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson)),
+  salesByPlatform: data.salesByPlatform.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (platform === "all" || row.platformName === platform) && (brand === "all" || row.platformName === brand)),
+  metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand)),
+  tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (brand === "all" || row.salesPlatformName === brand))
 });

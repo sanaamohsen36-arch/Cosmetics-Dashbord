@@ -221,8 +221,9 @@ function SalesUploadCard({
     const newPlatformSettings = enriched.platformSettings.slice(workingData.platformSettings.length);
     const newSalespeople = enriched.salespeople.slice(workingData.salespeople.length);
     const newPlatforms = enriched.platforms.slice(workingData.platforms.length);
+    const newBrands = enriched.brands.slice(workingData.brands.length);
     const next = await saveSalesUpload(enriched, rawFile, people, platforms, existing ? "replace" : "merge");
-    await saveMasterDataAdditions(newPlatformSettings, newSalespeople, newPlatforms);
+    await saveMasterDataAdditions(newPlatformSettings, newSalespeople, newPlatforms, newBrands);
     setData(next);
     setMessage(existing ? "تم استبدال بيانات المبيعات لهذا التاريخ." : "تم حفظ بيانات المبيعات.");
     setIsSaving(false);
@@ -418,12 +419,28 @@ const normalizePlatformRows = (rows: SalesByPlatform[], reportDate: string, bran
       createdAt
     }));
 
+// Section 19 revision: the Sales Report (this file's Pages_Input sheet) is
+// the only source of Brands now - every unique Page name IS a Brand,
+// auto-created here the same additive way new salespeople/platforms
+// already are. No manual Settings management, no upload-time selection.
 const syncMasterData = (data: AppData, people: SalesBySalesperson[], platforms: SalesByPlatform[]): AppData => {
   const salespersonKeys = new Set(data.salespeople.map((row) => `${row.code}-${row.name}`));
   const platformKeys = new Set(data.platforms.map((row) => row.name.trim().toLowerCase()));
   const settingKeys = new Set(data.platformSettings.map((row) => row.platformName.trim().toLowerCase()));
+  const brandKeys = new Set(data.brands.map((row) => row.name.trim().toLowerCase()));
   return {
     ...data,
+    brands: [
+      ...data.brands,
+      ...platforms
+        .filter((row) => {
+          const key = row.platformName.trim().toLowerCase();
+          if (!row.platformName || brandKeys.has(key)) return false;
+          brandKeys.add(key);
+          return true;
+        })
+        .map((row) => ({ id: createId(), name: row.platformName, active: true }))
+    ],
     salespeople: [
       ...data.salespeople,
       ...people

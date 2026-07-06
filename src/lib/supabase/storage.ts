@@ -235,12 +235,14 @@ export const saveData = async (data: AppData) => {
 export const saveMasterDataAdditions = async (
   newPlatformSettings: PlatformSetting[],
   newSalespeople: SalespersonMaster[],
-  newPlatforms: PlatformMaster[]
+  newPlatforms: PlatformMaster[],
+  newBrands: BrandMaster[] = []
 ) => {
   if (!supabase) return;
   await insertRows("platform_settings", newPlatformSettings.map(toPlatformSettingRow));
   await insertOptionalRows("salespeople", newSalespeople.map(toSalespersonMasterRow));
   await insertOptionalRows("platforms", newPlatforms.map(toPlatformMasterRow));
+  await insertOptionalRows("brands", newBrands.map(toBrandMasterRow));
 };
 
 // Mapping memory: remembers a user's manual correction of a parsed
