@@ -24,7 +24,7 @@ import {
   filterPlatforms
 } from "../../lib/metrics";
 import { chartTooltipStyle, integer, money, percent, ratio } from "../../lib/format";
-import { ChartPanel, KpiCard, SimpleTable } from "../../lib/ui";
+import { ChartPanel, KpiCard, MultiSelectDropdown, SimpleTable } from "../../lib/ui";
 import { brandKey, getEffectiveBrandNames } from "../../lib/brands";
 
 // Section 19 revision: Brand is the only business entity - each Sales Page
@@ -34,16 +34,20 @@ import { brandKey, getEffectiveBrandNames } from "../../lib/brands";
 export function DashboardPage({ data, range }: { data: AppData; range: DateRange }) {
   const [salesperson, setSalesperson] = useState("all");
   const [platform, setPlatform] = useState("all");
-  const [brand, setBrand] = useState("all");
-  const scopedData = useMemo(() => scopeData(data, range, salesperson, platform, brand), [data, range, salesperson, platform, brand]);
+  // [] means "All Brands" - not filtered. Never reset by date-range changes
+  // since it's independent state, only touched by the multi-select itself.
+  const [brands, setBrands] = useState<string[]>([]);
+  const effectiveBrands = useMemo(() => getEffectiveBrandNames(data), [data]);
+  const scopedData = useMemo(() => scopeData(data, range, salesperson, platform, brands), [data, range, salesperson, platform, brands]);
   // Brand or Page/Platform selected -> source the headline totals from
   // salesByPlatform (that page's own stored figures) instead of
   // salesBySalesperson, since a salesperson row has no page/brand
   // attribution to filter by - see calculateKpis' comment for why these are
   // mutually exclusive axes, not a bug.
+  const brandFilterActive = brands.length > 0 && brands.length < effectiveBrands.length;
   const kpis = useMemo(
-    () => calculateKpis(scopedData, range, { useSalesByPlatformForTotals: brand !== "all" || platform !== "all" }),
-    [scopedData, range, brand, platform]
+    () => calculateKpis(scopedData, range, { useSalesByPlatformForTotals: brandFilterActive || platform !== "all" }),
+    [scopedData, range, brandFilterActive, platform]
   );
   const resultCount = useMemo(() => filterAds(scopedData, range).reduce((sum, row) => sum + (Number(row.resultsCount) || Number(row.leads) || Number(row.purchases) || 0), 0), [scopedData, range]);
   const costPerResult = resultCount ? kpis.totalAdsSpend / resultCount : null;
@@ -72,15 +76,9 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
               {getEffectiveBrandNames(data).map((name) => <option key={name}>{name}</option>)}
             </select>
           </label>
-          <label>
-            Brand
-            {/* Every unique Page name from Sales IS a Brand now - no manual
-                management, derived from Sales data (lib/brands.ts). */}
-            <select value={brand} onChange={(event) => setBrand(event.target.value)}>
-              <option value="all">All</option>
-              {getEffectiveBrandNames(data).map((name) => <option key={name}>{name}</option>)}
-            </select>
-          </label>
+          {/* Every unique Page name from Sales IS a Brand now - no manual
+              management, derived from Sales data (lib/brands.ts). */}
+          <MultiSelectDropdown label="Brand" options={effectiveBrands} selected={brands} onChange={setBrands} />
         </div>
       </section>
       <section className="kpi-grid">
@@ -193,12 +191,14 @@ export function DashboardPage({ data, range }: { data: AppData; range: DateRange
 // fabricating a link that doesn't exist. Ads is filtered only by Brand
 // (the value selected at Ads Upload time) + Date - no more Ads-platform
 // business filter.
-const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brand: string): AppData => {
+const scopeData = (data: AppData, range: DateRange, salesperson: string, platform: string, brands: string[]): AppData => {
   // Compared by brandKey, not exact string equality, so a spelling variant
   // (ة/ه, أ/إ/آ, case, واتس/واتساب...) of the selected Brand/Page still
-  // matches instead of silently returning zero.
+  // matches instead of silently returning zero. brands=[] means "All Brands"
+  // (no filter) - matches getEffectiveBrandNames semantics used to build the
+  // dropdown options, never a guessed/legacy business dimension.
   const platformKeyToMatch = platform === "all" ? null : brandKey(platform);
-  const brandKeyToMatch = brand === "all" ? null : brandKey(brand);
+  const brandKeysToMatch = brands.length ? new Set(brands.map(brandKey)) : null;
   return {
     ...data,
     salesBySalesperson: data.salesBySalesperson.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (salesperson === "all" || row.salespersonName === salesperson)),
@@ -207,9 +207,9 @@ const scopeData = (data: AppData, range: DateRange, salesperson: string, platfor
         row.reportDate >= range.from &&
         row.reportDate <= range.to &&
         (!platformKeyToMatch || brandKey(row.platformName) === platformKeyToMatch) &&
-        (!brandKeyToMatch || brandKey(row.platformName) === brandKeyToMatch)
+        (!brandKeysToMatch || brandKeysToMatch.has(brandKey(row.platformName)))
     ),
-    metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (!brandKeyToMatch || brandKey(row.salesPlatformName) === brandKeyToMatch)),
-    tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (!brandKeyToMatch || brandKey(row.salesPlatformName) === brandKeyToMatch))
+    metaAds: data.metaAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (!brandKeysToMatch || brandKeysToMatch.has(brandKey(row.salesPlatformName)))),
+    tiktokAds: data.tiktokAds.filter((row) => row.reportDate >= range.from && row.reportDate <= range.to && (!brandKeysToMatch || brandKeysToMatch.has(brandKey(row.salesPlatformName))))
   };
 };
