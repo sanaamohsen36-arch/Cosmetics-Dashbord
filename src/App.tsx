@@ -107,7 +107,9 @@ export default function DashboardApp() {
     <div className={`app-shell ${theme}`} dir="rtl">
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">DR</div>
+          <div className="brand-mark">
+            <img src="/company-logo.svg" alt="Regenix Dermal" style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }} />
+          </div>
           <div>
             <strong>تقارير البيع</strong>
             <small>Sales + Ads BI</small>
