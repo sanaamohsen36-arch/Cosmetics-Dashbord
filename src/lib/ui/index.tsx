@@ -147,3 +147,50 @@ export function SimpleTable({ title, headers, children }: { title: string; heade
 export function Badge({ text }: { text: string }) {
   return <span className="badge">{text}</span>;
 }
+
+// Checkbox multi-select with Select All / Clear All. Selection is driven
+// entirely by the parent's `selected` prop (no internal copy), so switching
+// other filters (e.g. date range) never resets it - the parent only changes
+// `selected` when the user actually toggles something.
+export function MultiSelectDropdown({
+  label,
+  options,
+  selected,
+  onChange
+}: {
+  label: string;
+  options: string[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const allSelected = options.length > 0 && selected.length === options.length;
+  const summary = selected.length === 0 || allSelected ? "All" : selected.length === 1 ? selected[0] : `${selected.length} selected`;
+  const toggleOption = (name: string) => {
+    onChange(selected.includes(name) ? selected.filter((item) => item !== name) : [...selected, name]);
+  };
+  return (
+    <label className="multiselect">
+      {label}
+      <div className="multiselect-shell">
+        <button type="button" className="multiselect-summary" onClick={() => setOpen((value) => !value)}>
+          {summary}
+        </button>
+        {open && (
+          <div className="multiselect-dropdown">
+            <div className="multiselect-actions">
+              <button type="button" className="ghost" onClick={() => onChange(options)}>Select All</button>
+              <button type="button" className="ghost" onClick={() => onChange([])}>Clear All</button>
+            </div>
+            {options.map((option) => (
+              <label key={option} className="multiselect-option">
+                <input type="checkbox" checked={selected.includes(option)} onChange={() => toggleOption(option)} />
+                {option}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    </label>
+  );
+}

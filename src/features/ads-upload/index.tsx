@@ -44,14 +44,18 @@ export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data
             <p>اختاري Brand أولاً، ثم الشهر واليوم. يمكن رفع أكثر من ملف إعلانات لنفس اليوم لنفس الـ Brand.</p>
           </div>
         </div>
-        <div className="form-row">
-          <label>
-            Brand
-            <select value={brand} onChange={(event) => setBrand(event.target.value)}>
-              {knownBrands.map((item) => <option key={item}>{item}</option>)}
-            </select>
-          </label>
-        </div>
+        {knownBrands.length === 0 ? (
+          <p className="status-line">لا توجد Brands بعد - يجب رفع بيانات المبيعات أولاً لإنشاء Brand.</p>
+        ) : (
+          <div className="form-row">
+            <label>
+              Brand
+              <select value={brand} onChange={(event) => setBrand(event.target.value)}>
+                {knownBrands.map((item) => <option key={item}>{item}</option>)}
+              </select>
+            </label>
+          </div>
+        )}
         <MonthFolderList
           selectedMonth={selectedMonth}
           onSelect={(month) => setSelectedDate(firstDayOfMonth(month))}
@@ -80,16 +84,20 @@ export function AdsFolderPage({ data, setData }: { data: AppData; setData: (data
           <p className="status-line">لا توجد بيانات لهذا الـ Brand في اليوم المختار.</p>
         )}
         {statusMessage && <p className="status-line">{statusMessage}</p>}
-        <div className="form-row">
-          <label>
-            File type (لتحديد الأعمدة الصحيحة فقط)
-            <select value={adsPlatform} onChange={(event) => setAdsPlatform(event.target.value as AdsPlatform)}>
-              <option value="Meta">Meta (Facebook / Instagram)</option>
-              <option value="TikTok">TikTok</option>
-            </select>
-          </label>
-        </div>
-        <AdsUploadCard data={data} setData={setData} platform={adsPlatform} fixedDate={selectedDate} brandName={brand} />
+        {brand && (
+          <>
+            <div className="form-row">
+              <label>
+                File type (لتحديد الأعمدة الصحيحة فقط)
+                <select value={adsPlatform} onChange={(event) => setAdsPlatform(event.target.value as AdsPlatform)}>
+                  <option value="Meta">Meta (Facebook / Instagram)</option>
+                  <option value="TikTok">TikTok</option>
+                </select>
+              </label>
+            </div>
+            <AdsUploadCard data={data} setData={setData} platform={adsPlatform} fixedDate={selectedDate} brandName={brand} />
+          </>
+        )}
       </section>
     </div>
   );
@@ -100,13 +108,13 @@ function AdsUploadCard({
   setData,
   platform,
   fixedDate,
-  brandName = "عام"
+  brandName
 }: {
   data: AppData;
   setData: (data: AppData) => void;
   platform: AdsPlatform;
   fixedDate?: string;
-  brandName?: string;
+  brandName: string;
 }) {
   // Multiple files can be selected together (one platform can have multiple
   // ad accounts, each exported to its own file) - all are parsed and their

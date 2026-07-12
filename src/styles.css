@@ -224,6 +224,70 @@ input[type="file"] {
   font-size: 13px;
 }
 
+.multiselect {
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+  color: #b8c4d4;
+  font-size: 13px;
+}
+
+.multiselect-shell {
+  position: relative;
+}
+
+.multiselect-summary {
+  width: 100%;
+  text-align: left;
+}
+
+.multiselect-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 220px;
+  max-height: 280px;
+  overflow-y: auto;
+  background: #0b1422;
+  border: 1px solid #1f2a3b;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 6px;
+  z-index: 50;
+}
+
+.multiselect-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.multiselect-option {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  min-width: 0 !important;
+  color: #e2e8f0;
+  font-size: 13px;
+}
+
+.multiselect-option input {
+  width: auto;
+}
+
+.app-shell.light .multiselect-dropdown {
+  background: #ffffff;
+  border-color: #d8e1ec;
+  color: #0f172a;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+}
+
+.app-shell.light .multiselect-option {
+  color: #0f172a;
+}
+
 .content-grid,
 .dashboard-stack {
   display: grid;
