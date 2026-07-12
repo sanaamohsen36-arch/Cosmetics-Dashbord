@@ -4,7 +4,6 @@ import { useRef, useState } from "react";
 import { FileSpreadsheet, FolderOpen, RotateCcw, Save, Trash2 } from "lucide-react";
 import type { AppData, MappableField, SalesByPlatform, SalesBySalesperson, SalesRawFile } from "../../types";
 import { firstDayOfMonth, monthKey, today } from "../../lib/date";
-import { brandOptions } from "../../lib/constants";
 import { integer, money } from "../../lib/format";
 import { Badge, CalendarMonth, ErrorList, MonthFolderList, SimpleTable } from "../../lib/ui";
 import {
@@ -25,25 +24,19 @@ import {
 } from "../../lib/supabase";
 import type { PendingColumnMapping } from "../../lib/workbookParsers";
 import { applyManualColumnMapping, parseSalesImage, parseSalesWorkbook } from "../../lib/workbookParsers";
-import { brandKey } from "../../lib/brands";
+import { brandKey, resolveBrandName } from "../../lib/brands";
 import { MappingWizard } from "./MappingWizard";
 
+// One Sales file per date, covering every Brand/Page together (the Brand no
+// longer belongs to the upload - it's read per row from Pages_Input, same as
+// the "Brand = Page" model everywhere else). No Brand selector here anymore.
 export function SalesFolderPage({ data, setData }: { data: AppData; setData: (data: AppData) => void }) {
-  const knownBrands = [
-    ...new Set([
-      ...data.brands.filter((item) => item.active).map((item) => item.name),
-      ...brandOptions,
-      ...data.salesRawFiles.map((file) => file.brandName).filter(Boolean)
-    ])
-  ];
-  const [brand, setBrand] = useState(knownBrands[0]);
   const [selectedDate, setSelectedDate] = useState(today);
   const [statusMessage, setStatusMessage] = useState("");
-  const filesForBrand = data.salesRawFiles.filter((file) => file.brandName === brand);
-  const uploadedDates = new Set(filesForBrand.map((file) => file.reportDate));
-  const existingFile = filesForBrand.find((file) => file.reportDate === selectedDate);
+  const uploadedDates = new Set(data.salesRawFiles.map((file) => file.reportDate));
+  const existingFile = data.salesRawFiles.find((file) => file.reportDate === selectedDate);
   const selectedMonth = monthKey(selectedDate);
-  const monthsWithUploads = new Set(filesForBrand.map((file) => monthKey(file.reportDate)));
+  const monthsWithUploads = new Set(data.salesRawFiles.map((file) => monthKey(file.reportDate)));
   const deleteExistingFile = async () => {
     if (!existingFile) return;
     const confirmed = window.confirm(`Delete saved sales data for ${selectedDate}?`);
@@ -60,16 +53,12 @@ export function SalesFolderPage({ data, setData }: { data: AppData; setData: (da
           <FolderOpen />
           <div>
             <h2>Sales / المبيعات</h2>
-            <p>اختاري Brand أولاً، ثم الشهر، ثم اليوم. كل يوم/Brand له مساحة رفع مستقلة، وملف نهائي واحد فقط.</p>
+            <p>
+              Upload one daily Sales file containing all Brands. Brands are detected automatically from the workbook.
+              <br />
+              ارفعي ملف مبيعات واحد يوميًا يحتوي كل الـ Brands، ويتم اكتشافها تلقائيًا من الملف.
+            </p>
           </div>
-        </div>
-        <div className="form-row">
-          <label>
-            Brand
-            <select value={brand} onChange={(event) => setBrand(event.target.value)}>
-              {knownBrands.map((item) => <option key={item}>{item}</option>)}
-            </select>
-          </label>
         </div>
         <MonthFolderList
           selectedMonth={selectedMonth}
@@ -81,7 +70,7 @@ export function SalesFolderPage({ data, setData }: { data: AppData; setData: (da
         <CalendarMonth selectedDate={selectedDate} uploadedDates={uploadedDates} onSelect={setSelectedDate} />
       </section>
       <section className="panel">
-        <h2>{brand} — ملف يوم {selectedDate}</h2>
+        <h2>ملف يوم {selectedDate}</h2>
         {existingFile ? (
           <div className="file-status-card dark-card">
             <div>
@@ -97,10 +86,10 @@ export function SalesFolderPage({ data, setData }: { data: AppData; setData: (da
             </div>
           </div>
         ) : (
-          <p className="status-line">لا يوجد ملف محفوظ لهذا اليوم لهذا Brand.</p>
+          <p className="status-line">لا يوجد ملف محفوظ لهذا اليوم.</p>
         )}
         {statusMessage && <p className="status-line">{statusMessage}</p>}
-        <SalesUploadCard data={data} setData={setData} fixedDate={selectedDate} brandName={brand} compact />
+        <SalesUploadCard data={data} setData={setData} fixedDate={selectedDate} compact />
       </section>
     </div>
   );
@@ -110,13 +99,11 @@ function SalesUploadCard({
   data,
   setData,
   fixedDate,
-  brandName = "غير محدد",
   compact = false
 }: {
   data: AppData;
   setData: (data: AppData) => void;
   fixedDate?: string;
-  brandName?: string;
   compact?: boolean;
 }) {
   const [file, setFile] = useState<File | null>(null);
@@ -134,11 +121,14 @@ function SalesUploadCard({
   const [isSaving, setIsSaving] = useState(false);
   const [pendingMapping, setPendingMapping] = useState<PendingColumnMapping | null>(null);
   const activeDate = fixedDate || reportDate;
-  const existing =
-    data.salesBySalesperson.some((row) => row.reportDate === activeDate && row.brandName === brandName) ||
-    data.salesByPlatform.some((row) => row.reportDate === activeDate && row.brandName === brandName);
+  // One file per date now (no Brand dimension) - a date is either already
+  // uploaded (replace) or not (merge/new).
+  const existing = data.salesRawFiles.some((rawFile) => rawFile.reportDate === activeDate);
   const totals = salesPreviewTotals(peoplePreview, platformPreview);
   const hasValidPreview = (peoplePreview.length > 0 || platformPreview.length > 0) && errors.length === 0 && !pendingMapping;
+  // Detected Brands for the preview (requirement: show them before saving) -
+  // every distinct Page name in this file's Pages_Input rows.
+  const detectedBrands = [...new Set(normalSalesPlatforms(platformPreview).map((row) => row.platformName).filter(Boolean))];
 
   const reset = () => {
     setFile(null);
@@ -196,7 +186,9 @@ function SalesUploadCard({
       filePath: file.name,
       uploadedAt: now,
       reportDate: activeDate,
-      brandName,
+      // No single Brand for the whole file anymore - it covers every Brand
+      // found inside it, read per row below.
+      brandName: "",
       ocrStatus: "success",
       createdAt: now,
       version: 1,
@@ -216,8 +208,8 @@ function SalesUploadCard({
       workingData = await recordPageCorrection(workingData, correction.wrongValue, correction.correctValue);
     }
 
-    const people = normalizePeopleRows(peoplePreview, activeDate, brandName, sourceFileId, now);
-    const platforms = normalizePlatformRows(platformPreview, activeDate, brandName, sourceFileId, now);
+    const people = normalizePeopleRows(peoplePreview, activeDate, sourceFileId, now);
+    const platforms = normalizePlatformRows(platformPreview, activeDate, workingData, sourceFileId, now);
     const enriched = syncMasterData(workingData, people, platforms);
     const newPlatformSettings = enriched.platformSettings.slice(workingData.platformSettings.length);
     const newSalespeople = enriched.salespeople.slice(workingData.salespeople.length);
@@ -296,6 +288,7 @@ function SalesUploadCard({
         <div className="preview-stack">
           <div className={totals.peopleOrders === totals.platformOrders && totals.peopleRevenue === totals.platformRevenue ? "notice success-note" : "notice warning-note"}>
             <strong>إجماليات المعاينة</strong>
+            <span>Brands detected: {detectedBrands.length ? detectedBrands.join(", ") : "-"}</span>
             <span>إجمالي الأوردرات: {integer(totals.peopleOrders)} / إجمالي القيمة: {money(totals.peopleRevenue)}</span>
             <span>صباحي: {integer(totals.morningOrders)} أوردر / {money(totals.morningRevenue)}</span>
             <span>مسائي: {integer(totals.eveningOrders)} أوردر / {money(totals.eveningRevenue)}</span>
@@ -392,28 +385,33 @@ const salesPreviewTotals = (people: SalesBySalesperson[], platforms: SalesByPlat
   grandRevenue: platforms.find((row) => row.rowType === "grand_total")?.totalRevenue ?? null
 });
 
-const normalizePeopleRows = (rows: SalesBySalesperson[], reportDate: string, brandName: string, sourceFileId: string, createdAt: string) =>
+// Salespeople_Input has no Page/Brand column at all (independent sheet from
+// Pages_Input) - never inferred from the salesperson's name, left unset.
+const normalizePeopleRows = (rows: SalesBySalesperson[], reportDate: string, sourceFileId: string, createdAt: string) =>
   rows
     .filter((row) => row.salespersonName || row.salespersonCode || row.totalOrders || row.totalRevenue)
     .map((row) => ({
       ...row,
       id: createId(),
       reportDate,
-      brandName,
+      brandName: "",
       totalOrders: Number(row.morningOrders) + Number(row.eveningOrders),
       totalRevenue: Number(row.morningRevenue) + Number(row.eveningRevenue),
       sourceFileId,
       createdAt
     }));
 
-const normalizePlatformRows = (rows: SalesByPlatform[], reportDate: string, brandName: string, sourceFileId: string, createdAt: string) =>
+// Each Pages_Input row carries its own Brand (the Platform column) - resolved
+// against already-known Brand spellings so a variant merges instead of
+// creating a duplicate, same canonicalization Ads Upload/Dashboard rely on.
+const normalizePlatformRows = (rows: SalesByPlatform[], reportDate: string, data: AppData, sourceFileId: string, createdAt: string) =>
   normalSalesPlatforms(rows)
     .filter((row) => row.platformName || row.totalOrders || row.totalRevenue)
     .map((row) => ({
       ...row,
       id: createId(),
       reportDate,
-      brandName,
+      brandName: resolveBrandName(data, row.platformName),
       totalOrders: Number(row.morningOrders) + Number(row.eveningOrders),
       totalRevenue: Number(row.morningRevenue) + Number(row.eveningRevenue),
       sourceFileId,

@@ -581,9 +581,9 @@ export const saveSalesUpload = async (
   mode: UploadMode
 ): Promise<AppData> => {
   if (mode === "cancel") return current;
-  // One upload = one brand (docs/ARCHITECTURE.md section 19): a day+brand
-  // pair is one versioned slot, same as Ads' day+platform+brand+account slot.
-  const matchesSlot = (file: SalesRawFile) => file.reportDate === rawFile.reportDate && file.brandName === rawFile.brandName;
+  // One Sales file per date, covering every Brand together - a day is one
+  // versioned slot (Brand is no longer part of the key).
+  const matchesSlot = (file: SalesRawFile) => file.reportDate === rawFile.reportDate;
   const previousFile = current.salesRawFiles.find((file) => matchesSlot(file) && file.isCurrent);
   const versionedFile: SalesRawFile = {
     ...rawFile,
@@ -600,12 +600,8 @@ export const saveSalesUpload = async (
               ? { ...file, isCurrent: false, supersededAt: rawFile.createdAt, supersededBy: versionedFile.id }
               : file
           ),
-          salesBySalesperson: current.salesBySalesperson.filter(
-            (row) => !(row.reportDate === rawFile.reportDate && row.brandName === rawFile.brandName)
-          ),
-          salesByPlatform: current.salesByPlatform.filter(
-            (row) => !(row.reportDate === rawFile.reportDate && row.brandName === rawFile.brandName)
-          )
+          salesBySalesperson: current.salesBySalesperson.filter((row) => row.reportDate !== rawFile.reportDate),
+          salesByPlatform: current.salesByPlatform.filter((row) => row.reportDate !== rawFile.reportDate)
         }
       : current;
 
