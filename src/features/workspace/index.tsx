@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext } from "react";
+import { createContext, useContext, useEffect } from "react";
 import type { ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { Workspace } from "../../types";
@@ -44,17 +44,26 @@ export function WorkspaceGuard({ workspace, children }: { workspace: Workspace; 
 }
 
 // Post-login landing screen - shown instead of jumping straight into a
-// dashboard. Owner sees every configured workspace; everyone else sees only
-// the one their profile is assigned to.
+// dashboard. Owner ALWAYS sees this screen and picks a workspace manually,
+// every time, with no auto-navigation - never assume which one they want.
+// A non-owner has exactly one available workspace, so there is nothing to
+// choose: they are sent straight there instead of clicking their only card.
 export function WorkspaceSelector() {
   const { profile, authChecked, authError } = useAuthGate();
   const router = useRouter();
+  const role = effectiveRole(profile, isAuthEnabled);
+  const options = availableWorkspaces(role, profile?.workspace);
+  const isOwner = role === "owner";
+
+  useEffect(() => {
+    if (isAuthEnabled && !authChecked) return;
+    if (isAuthEnabled && !profile) return;
+    if (!isOwner && options.length === 1) router.replace(`/workspace/${options[0].key}`);
+  }, [authChecked, profile, isOwner, options, router]);
 
   if (isAuthEnabled && !authChecked) return null;
   if (isAuthEnabled && !profile) return <LoginForm errorMessage={authError} onSignedIn={() => undefined} />;
-
-  const role = effectiveRole(profile, isAuthEnabled);
-  const options = availableWorkspaces(role, profile?.workspace);
+  if (!isOwner && options.length === 1) return null;
 
   return (
     <div className="app-shell dark" dir="rtl">
