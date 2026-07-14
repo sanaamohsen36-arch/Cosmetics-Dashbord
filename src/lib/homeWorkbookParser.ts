@@ -1,23 +1,20 @@
 import * as XLSX from "xlsx";
 import type { ShiftType } from "../types";
 
-// Dedicated parser for the canonical Home_Sales_Upload_Template.xlsx - kept
-// fully separate from lib/workbookParsers.ts (Cosmetics' parser), which is
-// never touched by Phase 2.
+// Dedicated parser for the real Home_Sales_Upload_Template.xlsx - kept fully
+// separate from lib/workbookParsers.ts (Cosmetics' parser), which Phase 2
+// never touches.
 //
-// Real template shape (Upload_Info!B5/B6 blank until filled in):
-//   Upload_Info: Field/Value pairs - Workspace, Report_Date, Shift_Type,
-//     Upload_Key (a formula: =B4&"|"&TEXT(B5,"yyyy-mm-dd")&"|"&B6).
+// Real template shape (no Upload_Info sheet - Report Date and Shift Type
+// come from the UI's date picker/selector, not from the file):
 //   Salespeople_Input: header row 3 - Report_Date, Shift_Type,
 //     Salesperson_Code, Salesperson_Name, Team_Type, Orders, Revenue, Notes.
-//     Report_Date/Shift_Type per row are formulas mirroring Upload_Info -
-//     still validated per row per spec, in case a row is hand-overridden.
 //   Pages_Input: header row 3 - Report_Date, Shift_Type, Page_Name, Orders,
 //     Revenue, Notes.
-//   Summary: pure Excel-formula totals for the human filling the sheet -
-//     never parsed; this module computes its own totals independently.
+//   Summary: validation-only for the human filling the sheet - never parsed
+//     (this module computes its own totals independently) and not required.
 
-const REQUIRED_SHEETS = ["Upload_Info", "Salespeople_Input", "Pages_Input", "Summary"];
+const REQUIRED_SHEETS = ["Salespeople_Input", "Pages_Input"];
 const SALESPEOPLE_HEADERS = ["Report_Date", "Shift_Type", "Salesperson_Code", "Salesperson_Name", "Team_Type", "Orders", "Revenue", "Notes"];
 const PAGES_HEADERS = ["Report_Date", "Shift_Type", "Page_Name", "Orders", "Revenue", "Notes"];
 
@@ -38,11 +35,8 @@ export interface HomeParsedPageRow {
 }
 
 export interface HomeParsedWorkbook {
-  workspace: string;
   reportDate: string;
-  shiftType: ShiftType | "";
-  uploadKeyInFile: string;
-  computedUploadKey: string;
+  shiftType: ShiftType;
   salespeople: HomeParsedSalespersonRow[];
   pages: HomeParsedPageRow[];
   totals: { salespeopleOrders: number; pagesOrders: number; salespeopleRevenue: number; pagesRevenue: number };
@@ -52,14 +46,16 @@ export interface HomeParsedWorkbook {
 const cellText = (value: unknown): string => String(value ?? "").trim();
 const hasValue = (value: unknown): boolean => cellText(value) !== "";
 
-// Excel's 1900-epoch: a blank date cell driving a formula (e.g. row
-// Report_Date mirroring an unset Upload_Info!Report_Date) resolves to serial
-// 0, which SheetJS's cellDates surfaces as a ~1899 Date - never a real date.
+// SheetJS's cellDates conversion can land a few hours either side of
+// midnight UTC (Excel's serial-date epoch handling), e.g. an intended
+// 2026-07-12 cell coming through as "2026-07-11T20:59:51Z". Round to the
+// nearest day instead of truncating, matching what Excel itself displays.
 const excelDateToISO = (value: unknown): string => {
   if (!value) return "";
   if (value instanceof Date) {
     if (value.getUTCFullYear() < 1901) return "";
-    return value.toISOString().slice(0, 10);
+    const rounded = new Date(Math.round(value.getTime() / 86400000) * 86400000);
+    return rounded.toISOString().slice(0, 10);
   }
   const text = cellText(value);
   if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
@@ -98,11 +94,8 @@ export const parseHomeSalesWorkbook = async (
 ): Promise<HomeParsedWorkbook> => {
   const errors: string[] = [];
   const empty: HomeParsedWorkbook = {
-    workspace: "",
-    reportDate: "",
-    shiftType: "",
-    uploadKeyInFile: "",
-    computedUploadKey: "",
+    reportDate: selectedReportDate,
+    shiftType: selectedShiftType,
     salespeople: [],
     pages: [],
     totals: { salespeopleOrders: 0, pagesOrders: 0, salespeopleRevenue: 0, pagesRevenue: 0 },
@@ -121,26 +114,6 @@ export const parseHomeSalesWorkbook = async (
     if (!workbook.SheetNames.includes(sheetName)) errors.push(`Missing required sheet: ${sheetName}.`);
   }
   if (errors.length) return empty;
-
-  // Upload_Info: Field/Value pairs - looked up by field name, not position.
-  const uploadInfoRows = sheetRows(workbook, "Upload_Info");
-  const fieldValue = (fieldName: string): unknown => uploadInfoRows.find((row) => cellText(row[0]) === fieldName)?.[1];
-
-  const workspace = cellText(fieldValue("Workspace")).toLowerCase();
-  const reportDate = excelDateToISO(fieldValue("Report_Date"));
-  const shiftTypeRaw = cellText(fieldValue("Shift_Type"));
-  const shiftType: ShiftType | "" = shiftTypeRaw === "Morning" || shiftTypeRaw === "Evening" ? shiftTypeRaw : "";
-  const uploadKeyInFile = cellText(fieldValue("Upload_Key"));
-  const computedUploadKey = `${workspace}|${reportDate}|${shiftType}`;
-
-  if (workspace !== "home") errors.push(`Workspace must be "home" (file has "${workspace || "empty"}").`);
-  if (!reportDate) errors.push("Report_Date is missing in the file's Upload_Info sheet.");
-  else if (reportDate !== selectedReportDate) errors.push(`File Report_Date (${reportDate}) does not match the selected Report Date (${selectedReportDate}).`);
-  if (!shiftType) errors.push(`Shift_Type must be Morning or Evening (file has "${shiftTypeRaw || "empty"}").`);
-  else if (shiftType !== selectedShiftType) errors.push(`File Shift_Type (${shiftType}) does not match the selected Shift (${selectedShiftType}).`);
-  if (workspace === "home" && reportDate && shiftType && uploadKeyInFile !== computedUploadKey) {
-    errors.push(`Upload_Key does not match Workspace/Report_Date/Shift_Type (file has "${uploadKeyInFile}", expected "${computedUploadKey}").`);
-  }
 
   // Salespeople_Input
   const salespeopleRows = sheetRows(workbook, "Salespeople_Input");
@@ -225,5 +198,5 @@ export const parseHomeSalesWorkbook = async (
     }
   }
 
-  return { workspace, reportDate, shiftType, uploadKeyInFile, computedUploadKey, salespeople, pages, totals, errors };
+  return { reportDate: selectedReportDate, shiftType: selectedShiftType, salespeople, pages, totals, errors };
 };
