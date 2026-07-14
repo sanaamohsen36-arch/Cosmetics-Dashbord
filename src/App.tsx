@@ -12,10 +12,11 @@ import {
   UserCog,
   Users
 } from "lucide-react";
-import type { AppData, Capability, DateRange, PageKey, Profile, Workspace } from "./types";
+import type { AppData, Capability, DateRange, HomeAppData, PageKey, Profile, Workspace } from "./types";
 import { makePeriodRange, today } from "./lib/date";
 import { DateFilters } from "./lib/ui";
 import { emptyData, getStorageMode, loadData, saveData, subscribeToDataChanges } from "./lib/supabase";
+import { emptyHomeData, loadHomeData, subscribeToHomeDataChanges } from "./lib/supabase/homeStorage";
 import { isAuthEnabled } from "./lib/auth";
 import { useAuthGate } from "./lib/auth/useAuthGate";
 import { can, effectiveRole, roleLabels } from "./lib/permissions";
@@ -31,6 +32,15 @@ import { SalesReportsPage } from "./features/sales-report";
 import { PageReportPage } from "./features/page-report";
 import { SettingsPage } from "./features/settings";
 import { UsersPage } from "./features/users";
+import { HomeSalesUploadPage } from "./features/home-sales-upload";
+import { HomeDashboardPage } from "./features/home-dashboard";
+import { HomeSalesReportPage } from "./features/home-sales-report";
+import { HomePageReportPage } from "./features/home-page-report";
+
+// Pages with a real Home implementation so far (Phase 2) - anything else
+// (Ads Upload, Settings, and any future workspace entirely) falls back to
+// ComingSoonPage. Never branch on a workspace name directly elsewhere.
+const HOME_IMPLEMENTED_PAGES = new Set<PageKey>(["dashboard", "sales-upload", "sales-report", "page-report"]);
 
 const navItems: Array<{ key: PageKey; label: string; icon: ReactNode; capability: Capability }> = [
   { key: "dashboard", label: "Home Dashboard", icon: <LayoutDashboard size={18} />, capability: "dashboard.view" },
@@ -50,12 +60,14 @@ const navItems: Array<{ key: PageKey; label: string; icon: ReactNode; capability
 // directly, only `workspace === "cosmetics"` vs. not.
 export default function DashboardApp({ workspace }: { workspace: Workspace }) {
   const [data, setData] = useState<AppData>(() => emptyData());
+  const [homeData, setHomeData] = useState<HomeAppData>(() => emptyHomeData());
   const [page, setPage] = useState<PageKey>("dashboard");
   const [range, setRange] = useState<DateRange>({ from: today, to: today });
   const [periodMode, setPeriodMode] = useState<"day" | "week" | "month">("day");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const { profile, authChecked, authError, setProfile } = useAuthGate();
   const isCosmetics = workspace === "cosmetics";
+  const isHome = workspace === "home";
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -68,6 +80,14 @@ export default function DashboardApp({ workspace }: { workspace: Workspace }) {
     void loadData().then(setData);
     return subscribeToDataChanges(() => void loadData().then(setData));
   }, []);
+
+  // Home's own dataset - entirely separate load/subscribe from Cosmetics'
+  // above, only fetched when this instance is actually the Home workspace.
+  useEffect(() => {
+    if (!isHome) return;
+    void loadHomeData().then(setHomeData);
+    return subscribeToHomeDataChanges(() => void loadHomeData().then(setHomeData));
+  }, [isHome]);
 
   if (isAuthEnabled && !authChecked) return null;
   if (isAuthEnabled && !profile) {
@@ -137,17 +157,25 @@ export default function DashboardApp({ workspace }: { workspace: Workspace }) {
 
         {!hasPageAccess && <ForbiddenPage pageLabel={activeNavItem?.label ?? page} />}
         {/* Users management is cross-workspace (an Owner assigns workspaces
-            from any one) - every other page is this workspace's own data,
-            so only Cosmetics gets the real page today; anything else shows
-            the same layout with a placeholder body (Phase 2 builds these). */}
+            from any one). Cosmetics keeps every real page as before. Home
+            (Phase 2) gets real Dashboard/Sales Upload/Sales Report/Page
+            Report over its own data; Ads Upload/Settings and any future
+            workspace's unbuilt pages fall back to the same placeholder. */}
         {hasPageAccess && page === "users" && <UsersPage currentUserId={profile?.id ?? null} />}
-        {hasPageAccess && page !== "users" && !isCosmetics && <ComingSoonPage pageLabel={activeNavItem?.label ?? page} workspace={workspace} />}
         {hasPageAccess && isCosmetics && page === "dashboard" && <DashboardPage data={data} range={range} />}
         {hasPageAccess && isCosmetics && page === "sales-upload" && <SalesFolderPage data={data} setData={setData} />}
         {hasPageAccess && isCosmetics && page === "ads-upload" && <AdsFolderPage data={data} setData={setData} />}
         {hasPageAccess && isCosmetics && page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
         {hasPageAccess && isCosmetics && page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
         {hasPageAccess && isCosmetics && page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
+        {hasPageAccess && isHome && page === "dashboard" && <HomeDashboardPage data={homeData} range={range} />}
+        {hasPageAccess && isHome && page === "sales-upload" && <HomeSalesUploadPage data={homeData} setData={setHomeData} />}
+        {hasPageAccess && isHome && page === "sales-report" && <HomeSalesReportPage data={homeData} range={range} setRange={setRange} />}
+        {hasPageAccess && isHome && page === "page-report" && <HomePageReportPage data={homeData} range={range} setRange={setRange} />}
+        {hasPageAccess &&
+          page !== "users" &&
+          !isCosmetics &&
+          !(isHome && HOME_IMPLEMENTED_PAGES.has(page)) && <ComingSoonPage pageLabel={activeNavItem?.label ?? page} workspace={workspace} />}
       </main>
     </div>
   );

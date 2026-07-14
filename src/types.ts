@@ -338,3 +338,56 @@ export interface Kpis {
   bestPlatformByOrders: string;
   bestPlatformByRevenue: string;
 }
+
+// Phase 2 (Home workspace). Entirely separate data model from Cosmetics'
+// AppData above - Home has no Brands, one upload = one date + one shift.
+export type ShiftType = "Morning" | "Evening";
+
+export interface HomeSalesRawFile {
+  id: string;
+  workspace: "home";
+  reportDate: string;
+  shiftType: ShiftType;
+  uploadKey: string;
+  fileName: string;
+  uploadedAt: string;
+  createdAt: string;
+  version: number;
+  isCurrent: boolean;
+  supersededAt?: string | null;
+  supersededBy?: string | null;
+}
+
+export interface HomeSalesBySalesperson {
+  id: string;
+  workspace: "home";
+  reportDate: string;
+  shiftType: ShiftType;
+  salespersonCode: string;
+  salespersonName: string;
+  teamType: string;
+  orders: number;
+  revenue: number;
+  notes: string;
+  sourceFileId: string;
+  createdAt: string;
+}
+
+export interface HomeSalesByPage {
+  id: string;
+  workspace: "home";
+  reportDate: string;
+  shiftType: ShiftType;
+  pageName: string;
+  orders: number;
+  revenue: number;
+  notes: string;
+  sourceFileId: string;
+  createdAt: string;
+}
+
+export interface HomeAppData {
+  rawFiles: HomeSalesRawFile[];
+  salespeople: HomeSalesBySalesperson[];
+  pages: HomeSalesByPage[];
+}
