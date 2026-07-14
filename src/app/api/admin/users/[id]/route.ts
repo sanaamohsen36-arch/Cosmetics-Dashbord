@@ -6,6 +6,7 @@ export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const VALID_ROLES = ["owner", "admin", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
+const VALID_WORKSPACES = ["cosmetics", "home"];
 // Effectively permanent (~100 years) - GoTrue's ban mechanism, used instead
 // of deleting the user. "none" lifts it. Matches "do not permanently delete
 // users": this is fully reversible via Enable.
@@ -22,6 +23,11 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       const role = String(body.role);
       if (!VALID_ROLES.includes(role)) throw new ApiError(400, `Invalid role: ${role}`);
       patch.role = role;
+    }
+    if (body?.workspace !== undefined) {
+      const workspace = String(body.workspace);
+      if (!VALID_WORKSPACES.includes(workspace)) throw new ApiError(400, `Invalid workspace: ${workspace}`);
+      patch.workspace = workspace;
     }
     if (body?.displayName !== undefined) {
       patch.display_name = String(body.displayName).trim();

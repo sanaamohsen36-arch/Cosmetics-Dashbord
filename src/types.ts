@@ -194,11 +194,17 @@ export interface DateRange {
 // Section 13 (Roles & Permissions)
 export type Role = "owner" | "admin" | "marketing_manager" | "media_buyer" | "sales_manager" | "data_entry" | "viewer";
 
+// Section 20 (Multi-Workspace). Every profile belongs to exactly one
+// workspace; "owner" bypasses this restriction (see lib/workspaces.ts) and
+// can enter any workspace regardless of this field's value.
+export type Workspace = "cosmetics" | "home";
+
 export interface Profile {
   id: string;
   displayName: string;
   email: string;
   role: Role;
+  workspace: Workspace;
   active: boolean;
   lastSignInAt?: string | null;
   createdAt: string;

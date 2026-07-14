@@ -1120,6 +1120,54 @@ structure accommodates them without rework when their time comes.
   Remaining gap: Dashboard/Sales Report/Page Report don't filter by brand
   yet, they show sales data combined across brands.
 
+## 20. Multi-Workspace Architecture (Phase 1: shell + permissions only)
+
+Converts the single Cosmetics dashboard into a multi-tenant-by-business-line
+system. `Cosmetics` is the existing, unchanged product; `Home` is a second
+workspace added with the exact same layout but placeholder pages - its real
+upload/report logic is Phase 2.
+
+- **Registry, not hardcoding**: `src/lib/workspaces.ts` is the single list of
+  configured workspaces (`{ key, label, emoji }`). Adding a future one (Real
+  Estate, Clinics, ...) is one new entry there plus a `profiles.workspace`
+  value to assign users to it - no page/route/component is ever written
+  against a literal `"cosmetics"`/`"home"` string outside this file and the
+  Users page's create-user default.
+- **Permission model**: `profiles.workspace` (`'cosmetics' | 'home'`, new
+  column - migration `0003_add_workspace_to_profiles.sql`, defaults existing
+  rows to `'cosmetics'` so no current user's access changes). `role: "owner"`
+  bypasses it entirely; every other role may only enter its own assigned
+  workspace. `lib/workspaces.ts#canAccessWorkspace`/`availableWorkspaces` are
+  the only place this check lives.
+- **Routing**: `/` now only resolves auth, then redirects to `/workspace`
+  (the Workspace Selection screen, `features/workspace#WorkspaceSelector`) -
+  it no longer renders a dashboard directly. `/workspace/[workspace]` mounts
+  `WorkspaceGuard` (checks `canAccessWorkspace`, else the same `ForbiddenPage`
+  App.tsx already uses for capability violations) wrapping `WorkspaceProvider`
+  (React context - `useWorkspace()`, no prop drilling) wrapping the existing
+  `App.tsx` dashboard shell, now taking a `workspace` prop.
+- **App.tsx stays the shell for every workspace**: nav items, sidebar, topbar,
+  and all data-loading are unchanged and shared. Every real page (Dashboard,
+  Sales/Ads Upload, both Reports, Settings) only renders when
+  `workspace === "cosmetics"`; any other workspace renders the same layout
+  with `ComingSoonPage` in the body instead. The Users page is the one
+  exception - it's cross-workspace (an Owner manages users/workspace
+  assignment from either workspace), so it always renders for real.
+- **Not done in Phase 1, by design**: no `workspace` column on the Sales/Ads
+  data tables and no workspace-scoped API route exists yet - Home has no
+  real upload logic (Phase 2), so there is nothing to leak across workspaces
+  today. `lib/supabase/admin.ts#requireWorkspaceAccess` is written and ready
+  for Phase 2's Home API routes to call (mirrors `requireOwner`'s pattern:
+  verify the caller's own session, then check `profile.workspace`), but
+  nothing calls it yet.
+- **What "403" means here**: this app has no server-rendered auth middleware
+  (sessions live in the browser via the Supabase JS client, not cookies a
+  Next.js Edge Middleware could read), so route-level protection is the same
+  client-checked-before-render pattern the rest of the app already uses for
+  capability checks - not an HTTP-layer 403 status. API routes (`requireOwner`,
+  `requireWorkspaceAccess`) do return a real `403` status, same as today's
+  `/api/admin/users`.
+
 ---
 
 *This document should be updated whenever a decision in section 12 is

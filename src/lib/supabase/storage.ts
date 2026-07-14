@@ -1173,6 +1173,7 @@ const fromProfileRow = (row: any): Profile => ({
   displayName: row.display_name || "",
   email: row.email || "",
   role: row.role,
+  workspace: row.workspace || "cosmetics",
   active: Boolean(row.active),
   createdAt: row.created_at
 });

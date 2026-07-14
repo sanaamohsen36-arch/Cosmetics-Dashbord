@@ -1,4 +1,4 @@
-import type { Profile, Role } from "../../types";
+import type { Profile, Role, Workspace } from "../../types";
 import { isSupabaseConfigured, supabase } from "../supabase/client";
 
 // Auth is only meaningful when Supabase is configured - in local-fallback
@@ -31,6 +31,10 @@ const fromProfileRow = (row: any): Profile => ({
   displayName: row.display_name || "",
   email: row.email || "",
   role: row.role as Role,
+  // Existing rows predate the workspace column - default to "cosmetics" (the
+  // one workspace with real data today) so every current user's access is
+  // unchanged until an Owner assigns them elsewhere.
+  workspace: (row.workspace as Workspace) || "cosmetics",
   active: Boolean(row.active),
   createdAt: row.created_at
 });
@@ -56,7 +60,10 @@ export const getCurrentProfile = async (): Promise<Profile | null> => {
   const displayName = email || "New user";
   const { error: upsertError } = await supabase
     .from("profiles")
-    .upsert({ id: userId, display_name: displayName, email, role: "viewer", active: true }, { onConflict: "id", ignoreDuplicates: true });
+    .upsert(
+      { id: userId, display_name: displayName, email, role: "viewer", workspace: "cosmetics", active: true },
+      { onConflict: "id", ignoreDuplicates: true }
+    );
   if (upsertError) throw upsertError;
 
   const { data: created, error: refetchError } = await supabase.from("profiles").select("*").eq("id", userId).single();

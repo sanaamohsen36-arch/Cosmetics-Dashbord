@@ -9,6 +9,7 @@ export const dynamic = "force-dynamic";
 export const fetchCache = "force-no-store";
 
 const VALID_ROLES = ["owner", "admin", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
+const VALID_WORKSPACES = ["cosmetics", "home"];
 
 export async function GET(request: Request) {
   try {
@@ -41,6 +42,7 @@ export async function GET(request: Request) {
         email: user.email ?? profile?.email ?? "",
         displayName: profile?.display_name ?? user.email ?? "",
         role: profile?.role ?? "viewer",
+        workspace: profile?.workspace ?? "cosmetics",
         active: profile ? Boolean(profile.active) : true,
         lastSignInAt: user.last_sign_in_at ?? null,
         createdAt: profile?.created_at ?? user.created_at
@@ -61,8 +63,10 @@ export async function POST(request: Request) {
     const email = String(body?.email ?? "").trim();
     const displayName = String(body?.displayName ?? "").trim() || email;
     const role = String(body?.role ?? "viewer");
+    const workspace = String(body?.workspace ?? "cosmetics");
     if (!email) throw new ApiError(400, "Email is required.");
     if (!VALID_ROLES.includes(role)) throw new ApiError(400, `Invalid role: ${role}`);
+    if (!VALID_WORKSPACES.includes(workspace)) throw new ApiError(400, `Invalid workspace: ${workspace}`);
 
     const serviceClient = getServiceClient();
 
@@ -78,7 +82,7 @@ export async function POST(request: Request) {
 
     const { error: profileError } = await serviceClient
       .from("profiles")
-      .upsert({ id: userId, display_name: displayName, email, role, active: true }, { onConflict: "id" });
+      .upsert({ id: userId, display_name: displayName, email, role, workspace, active: true }, { onConflict: "id" });
     if (profileError) throw new ApiError(500, profileError.message);
 
     return NextResponse.json({
@@ -86,6 +90,7 @@ export async function POST(request: Request) {
       email,
       displayName,
       role,
+      workspace,
       active: true,
       lastSignInAt: null,
       createdAt: invited.user.created_at

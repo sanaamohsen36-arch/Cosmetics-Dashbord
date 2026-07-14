@@ -12,15 +12,18 @@ import {
   UserCog,
   Users
 } from "lucide-react";
-import type { AppData, Capability, DateRange, PageKey, Profile } from "./types";
+import type { AppData, Capability, DateRange, PageKey, Profile, Workspace } from "./types";
 import { makePeriodRange, today } from "./lib/date";
 import { DateFilters } from "./lib/ui";
 import { emptyData, getStorageMode, loadData, saveData, subscribeToDataChanges } from "./lib/supabase";
-import { isAuthEnabled, getCurrentProfile, onAuthStateChange } from "./lib/auth";
+import { isAuthEnabled } from "./lib/auth";
+import { useAuthGate } from "./lib/auth/useAuthGate";
 import { can, effectiveRole, roleLabels } from "./lib/permissions";
+import { workspaceConfig } from "./lib/workspaces";
 import { LoginForm, SignOutButton } from "./features/auth";
 import { NotificationBell } from "./features/notifications";
 import { ForbiddenPage } from "./features/forbidden";
+import { ComingSoonPage } from "./features/workspace";
 import { SalesFolderPage } from "./features/sales-upload";
 import { AdsFolderPage } from "./features/ads-upload";
 import { DashboardPage } from "./features/dashboard";
@@ -39,15 +42,20 @@ const navItems: Array<{ key: PageKey; label: string; icon: ReactNode; capability
   { key: "users", label: "Users", icon: <UserCog size={18} />, capability: "users.view" }
 ];
 
-export default function DashboardApp() {
+// Section 20 (Multi-Workspace): this component is the shell for a single
+// active workspace, mounted at /workspace/[workspace] once WorkspaceGuard
+// has confirmed access. Cosmetics keeps every existing page unchanged;
+// any other workspace (Home today, more later) shows the same sidebar/nav
+// but a placeholder body per page - no workspace name is ever branched on
+// directly, only `workspace === "cosmetics"` vs. not.
+export default function DashboardApp({ workspace }: { workspace: Workspace }) {
   const [data, setData] = useState<AppData>(() => emptyData());
   const [page, setPage] = useState<PageKey>("dashboard");
   const [range, setRange] = useState<DateRange>({ from: today, to: today });
   const [periodMode, setPeriodMode] = useState<"day" | "week" | "month">("day");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const [profile, setProfile] = useState<Profile | null>(null);
-  const [authChecked, setAuthChecked] = useState(!isAuthEnabled);
-  const [authError, setAuthError] = useState("");
+  const { profile, authChecked, authError, setProfile } = useAuthGate();
+  const isCosmetics = workspace === "cosmetics";
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -59,30 +67,6 @@ export default function DashboardApp() {
     if (savedTheme === "light" || savedTheme === "dark") setTheme(savedTheme);
     void loadData().then(setData);
     return subscribeToDataChanges(() => void loadData().then(setData));
-  }, []);
-
-  useEffect(() => {
-    if (!isAuthEnabled) return;
-    const loadProfile = () =>
-      getCurrentProfile()
-        .then((current) => {
-          setProfile(current);
-          setAuthError("");
-        })
-        .catch((error) => setAuthError(error instanceof Error ? error.message : String(error)))
-        .finally(() => setAuthChecked(true));
-
-    void loadProfile();
-    // Single source of truth for post-login profile fetch - avoids racing
-    // with LoginForm's own onSignedIn callback, which used to fetch too and
-    // could hit a unique-violation on the profiles insert.
-    return onAuthStateChange((userId) => {
-      if (!userId) {
-        setProfile(null);
-        return;
-      }
-      void loadProfile();
-    });
   }, []);
 
   if (isAuthEnabled && !authChecked) return null;
@@ -112,7 +96,7 @@ export default function DashboardApp() {
           </div>
           <div>
             <strong>تقارير البيع</strong>
-            <small>Sales + Ads BI</small>
+            <small>Sales + Ads BI - {workspaceConfig(workspace).emoji} {workspaceConfig(workspace).label}</small>
           </div>
         </div>
         <nav>
@@ -152,13 +136,18 @@ export default function DashboardApp() {
         </header>
 
         {!hasPageAccess && <ForbiddenPage pageLabel={activeNavItem?.label ?? page} />}
-        {hasPageAccess && page === "dashboard" && <DashboardPage data={data} range={range} />}
-        {hasPageAccess && page === "sales-upload" && <SalesFolderPage data={data} setData={setData} />}
-        {hasPageAccess && page === "ads-upload" && <AdsFolderPage data={data} setData={setData} />}
-        {hasPageAccess && page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
-        {hasPageAccess && page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
-        {hasPageAccess && page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
+        {/* Users management is cross-workspace (an Owner assigns workspaces
+            from any one) - every other page is this workspace's own data,
+            so only Cosmetics gets the real page today; anything else shows
+            the same layout with a placeholder body (Phase 2 builds these). */}
         {hasPageAccess && page === "users" && <UsersPage currentUserId={profile?.id ?? null} />}
+        {hasPageAccess && page !== "users" && !isCosmetics && <ComingSoonPage pageLabel={activeNavItem?.label ?? page} workspace={workspace} />}
+        {hasPageAccess && isCosmetics && page === "dashboard" && <DashboardPage data={data} range={range} />}
+        {hasPageAccess && isCosmetics && page === "sales-upload" && <SalesFolderPage data={data} setData={setData} />}
+        {hasPageAccess && isCosmetics && page === "ads-upload" && <AdsFolderPage data={data} setData={setData} />}
+        {hasPageAccess && isCosmetics && page === "sales-report" && <SalesReportsPage data={data} range={range} setRange={setRange} />}
+        {hasPageAccess && isCosmetics && page === "page-report" && <PageReportPage data={data} range={range} setRange={setRange} />}
+        {hasPageAccess && isCosmetics && page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
       </main>
     </div>
   );

@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
-import type { Role } from "../../types";
+import type { Role, Workspace } from "../../types";
 import { isAuthEnabled } from "../../lib/auth";
 import { allRoles, ROLE_CAPABILITIES, can, roleLabels } from "../../lib/permissions";
+import { WORKSPACES } from "../../lib/workspaces";
 import { Badge, SimpleTable } from "../../lib/ui";
 import { deleteUser, inviteUser, listAllUsers, updateUser, type AdminUser } from "../../lib/adminUsers";
 
@@ -16,6 +17,7 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<Role>("viewer");
+  const [workspace, setWorkspace] = useState<Workspace>("cosmetics");
   const [creating, setCreating] = useState(false);
 
   const refresh = () => {
@@ -37,11 +39,12 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
     setCreating(true);
     setError("");
     try {
-      await inviteUser({ email: email.trim(), displayName: displayName.trim() || email.trim(), role });
+      await inviteUser({ email: email.trim(), displayName: displayName.trim() || email.trim(), role, workspace });
       setMessage(`تم إرسال دعوة إلى ${email.trim()}.`);
       setEmail("");
       setDisplayName("");
       setRole("viewer");
+      setWorkspace("cosmetics");
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -55,6 +58,16 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
     try {
       await updateUser(id, { role: newRole });
       setUsers((prev) => prev.map((item) => (item.id === id ? { ...item, role: newRole } : item)));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const changeWorkspace = async (id: string, newWorkspace: Workspace) => {
+    setError("");
+    try {
+      await updateUser(id, { workspace: newWorkspace });
+      setUsers((prev) => prev.map((item) => (item.id === id ? { ...item, workspace: newWorkspace } : item)));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -121,6 +134,12 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
               {allRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
             </select>
           </label>
+          <label>
+            Workspace
+            <select value={workspace} onChange={(event) => setWorkspace(event.target.value as Workspace)} disabled={!isAuthEnabled}>
+              {WORKSPACES.map((item) => <option key={item.key} value={item.key}>{item.emoji} {item.label}</option>)}
+            </select>
+          </label>
           <button className="primary" disabled={!isAuthEnabled || creating || !email.trim()} onClick={createUser}>
             <UserPlus size={18} />
             {creating ? "..." : "Create User"}
@@ -129,11 +148,11 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
         <p className="status-line">إنشاء المستخدم يرسل دعوة بالبريد الإلكتروني لتعيين كلمة المرور - لا تُدخل أي كلمة مرور هنا.</p>
       </section>
 
-      <SimpleTable title="Users" headers={["Name", "Email", "Role", "Status", "Last Login", "Actions"]}>
+      <SimpleTable title="Users" headers={["Name", "Email", "Role", "Workspace", "Status", "Last Login", "Actions"]}>
         {loading ? (
-          <tr><td colSpan={6}>Loading...</td></tr>
+          <tr><td colSpan={7}>Loading...</td></tr>
         ) : users.length === 0 ? (
-          <tr><td colSpan={6}>لا يوجد مستخدمون بعد.</td></tr>
+          <tr><td colSpan={7}>لا يوجد مستخدمون بعد.</td></tr>
         ) : (
           users.map((user) => {
             const ownerCount = users.filter((item) => item.role === "owner").length;
@@ -146,6 +165,16 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
                 <td>
                   <select value={user.role} onChange={(event) => changeRole(user.id, event.target.value as Role)}>
                     {allRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
+                  </select>
+                </td>
+                <td>
+                  <select
+                    value={user.workspace}
+                    disabled={user.role === "owner"}
+                    title={user.role === "owner" ? "Owner يصل إلى كل مساحات العمل بغض النظر عن هذا الحقل." : undefined}
+                    onChange={(event) => changeWorkspace(user.id, event.target.value as Workspace)}
+                  >
+                    {WORKSPACES.map((item) => <option key={item.key} value={item.key}>{item.emoji} {item.label}</option>)}
                   </select>
                 </td>
                 <td><Badge text={user.active ? "Active" : "Disabled"} /></td>

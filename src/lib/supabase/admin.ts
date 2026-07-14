@@ -69,6 +69,43 @@ export const requireOwner = async (request: Request): Promise<{ userId: string }
   return { userId: userData.user.id };
 };
 
+// Section 20 (Multi-Workspace) API helper, ready for Phase 2's Home-workspace
+// routes: verifies the caller's own session same as requireOwner, then
+// confirms their profile can access the given workspace (owner bypasses,
+// everyone else must match profile.workspace). No workspace-scoped route
+// exists yet in Phase 1 - Home has no backend - but any future one should
+// call this before touching workspace-scoped data.
+export const requireWorkspaceAccess = async (request: Request, workspace: string): Promise<{ userId: string }> => {
+  const authHeader = request.headers.get("authorization") || "";
+  const token = authHeader.replace(/^Bearer\s+/i, "").trim();
+  if (!token) throw new ApiError(401, "Missing session token.");
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !anonKey) throw new ApiError(500, "Supabase is not configured.");
+
+  const callerClient = createClient(supabaseUrl, anonKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+    auth: { autoRefreshToken: false, persistSession: false }
+  });
+
+  const { data: userData, error: userError } = await callerClient.auth.getUser(token);
+  if (userError || !userData.user) throw new ApiError(401, userError?.message || "Invalid or expired session.");
+
+  const { data: profile, error: profileError } = await callerClient
+    .from("profiles")
+    .select("role, workspace")
+    .eq("id", userData.user.id)
+    .maybeSingle();
+  if (profileError) throw new ApiError(500, profileError.message);
+  if (!profile) throw new ApiError(403, "No profile found for this session.");
+  if (profile.role !== "owner" && profile.workspace !== workspace) {
+    throw new ApiError(403, `Forbidden: this account cannot access the ${workspace} workspace.`);
+  }
+
+  return { userId: userData.user.id };
+};
+
 export const handleApiError = (error: unknown) => {
   console.error("admin API error", error);
   if (error instanceof ApiError) return { status: error.status, body: { error: error.message } };

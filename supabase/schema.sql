@@ -211,6 +211,9 @@ create index if not exists idx_ocr_page_corrections_wrong_value on public.ocr_pa
 create index if not exists idx_ocr_salesperson_corrections_wrong_code on public.ocr_salesperson_corrections (wrong_value, salesperson_code);
 
 -- Section 13 (User Roles & Permissions): one row per authenticated user.
+-- Section 20 (Multi-Workspace): "workspace" gates which workspace(s) a
+-- non-owner may enter - see supabase/migrations/0003_add_workspace_to_profiles.sql
+-- for the same column applied to an already-deployed database.
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   display_name text not null,
@@ -218,6 +221,7 @@ create table if not exists public.profiles (
   role text not null default 'viewer' check (
     role in ('owner','admin','marketing_manager','media_buyer','sales_manager','data_entry','viewer')
   ),
+  workspace text not null default 'cosmetics' check (workspace in ('cosmetics','home')),
   active boolean not null default true,
   created_at timestamptz not null default now()
 );
