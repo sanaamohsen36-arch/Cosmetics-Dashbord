@@ -36,7 +36,7 @@ export function WorkspaceGuard({ workspace, children }: { workspace: Workspace; 
   if (isAuthEnabled && !profile) return <LoginForm errorMessage={authError} onSignedIn={() => undefined} />;
 
   const role = effectiveRole(profile, isAuthEnabled);
-  if (!canAccessWorkspace(role, profile?.workspace, workspace)) {
+  if (!canAccessWorkspace(role, profile?.workspaces, workspace)) {
     return <ForbiddenPage pageLabel={`${workspaceConfig(workspace).label} workspace`} />;
   }
 
@@ -52,7 +52,7 @@ export function WorkspaceSelector() {
   const { profile, authChecked, authError } = useAuthGate();
   const router = useRouter();
   const role = effectiveRole(profile, isAuthEnabled);
-  const options = availableWorkspaces(role, profile?.workspace);
+  const options = availableWorkspaces(role, profile?.workspaces);
   const isOwner = role === "owner";
 
   useEffect(() => {

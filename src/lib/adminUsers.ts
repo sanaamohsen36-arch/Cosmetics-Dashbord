@@ -1,4 +1,4 @@
-import type { Profile, Role, Workspace } from "../types";
+import type { MultiRole, Profile, Role, Workspace } from "../types";
 import { supabase } from "./supabase/client";
 
 // Combined auth.users + profiles shape returned by /api/admin/users - the
@@ -24,7 +24,14 @@ export const listAllUsers = async (): Promise<AdminUser[]> => {
   return response.json();
 };
 
-export const inviteUser = async (input: { email: string; displayName: string; role: Role; workspace: Workspace }): Promise<AdminUser> => {
+export const inviteUser = async (input: {
+  email: string;
+  displayName: string;
+  role: Role;
+  workspace: Workspace;
+  roles: MultiRole[];
+  workspaces: Workspace[];
+}): Promise<AdminUser> => {
   const response = await fetch("/api/admin/users", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await authHeader()) },
@@ -35,7 +42,10 @@ export const inviteUser = async (input: { email: string; displayName: string; ro
   return response.json();
 };
 
-export const updateUser = async (id: string, patch: { role?: Role; workspace?: Workspace; active?: boolean; displayName?: string }): Promise<void> => {
+export const updateUser = async (
+  id: string,
+  patch: { role?: Role; workspace?: Workspace; roles?: MultiRole[]; workspaces?: Workspace[]; active?: boolean; displayName?: string }
+): Promise<void> => {
   const response = await fetch(`/api/admin/users/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", ...(await authHeader()) },

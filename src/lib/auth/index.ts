@@ -35,6 +35,8 @@ const fromProfileRow = (row: any): Profile => ({
   // one workspace with real data today) so every current user's access is
   // unchanged until an Owner assigns them elsewhere.
   workspace: (row.workspace as Workspace) || "cosmetics",
+  roles: Array.isArray(row.roles) ? row.roles : [],
+  workspaces: Array.isArray(row.workspaces) && row.workspaces.length ? row.workspaces : [(row.workspace as Workspace) || "cosmetics"],
   active: Boolean(row.active),
   createdAt: row.created_at
 });
@@ -61,7 +63,7 @@ export const getCurrentProfile = async (): Promise<Profile | null> => {
   const { error: upsertError } = await supabase
     .from("profiles")
     .upsert(
-      { id: userId, display_name: displayName, email, role: "viewer", workspace: "cosmetics", active: true },
+      { id: userId, display_name: displayName, email, role: "viewer", workspace: "cosmetics", roles: [], workspaces: ["cosmetics"], active: true },
       { onConflict: "id", ignoreDuplicates: true }
     );
   if (upsertError) throw upsertError;

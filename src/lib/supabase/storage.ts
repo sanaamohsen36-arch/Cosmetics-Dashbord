@@ -1174,6 +1174,8 @@ const fromProfileRow = (row: any): Profile => ({
   email: row.email || "",
   role: row.role,
   workspace: row.workspace || "cosmetics",
+  roles: Array.isArray(row.roles) ? row.roles : [],
+  workspaces: Array.isArray(row.workspaces) && row.workspaces.length ? row.workspaces : [row.workspace || "cosmetics"],
   active: Boolean(row.active),
   createdAt: row.created_at
 });

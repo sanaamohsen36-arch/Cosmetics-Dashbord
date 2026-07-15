@@ -199,12 +199,19 @@ export type Role = "owner" | "admin" | "marketing_manager" | "media_buyer" | "sa
 // can enter any workspace regardless of this field's value.
 export type Workspace = "cosmetics" | "home";
 
+// Additive, per-workspace composable roles - separate from the legacy
+// single `role` (still drives Owner/admin/viewer/media_buyer capabilities
+// for Settings/Backup/Audit/Users, untouched by this model).
+export type MultiRole = "data_entry" | "sales_manager" | "marketing_manager";
+
 export interface Profile {
   id: string;
   displayName: string;
   email: string;
   role: Role;
   workspace: Workspace;
+  roles: MultiRole[];
+  workspaces: Workspace[];
   active: boolean;
   lastSignInAt?: string | null;
   createdAt: string;

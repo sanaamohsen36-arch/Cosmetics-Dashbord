@@ -21,7 +21,7 @@ import { emptyData, getStorageMode, loadData, saveData, subscribeToDataChanges }
 import { emptyHomeData, loadHomeData, subscribeToHomeDataChanges } from "./lib/supabase/homeStorage";
 import { isAuthEnabled } from "./lib/auth";
 import { useAuthGate } from "./lib/auth/useAuthGate";
-import { can, effectiveRole, roleLabels } from "./lib/permissions";
+import { can, canUpload, canViewAdsReports, canViewDashboard, canViewSalesReports, effectiveRole, roleLabels } from "./lib/permissions";
 import { workspaceConfig } from "./lib/workspaces";
 import { LoginForm, SignOutButton } from "./features/auth";
 import { NotificationBell } from "./features/notifications";
@@ -108,9 +108,22 @@ export default function DashboardApp({ workspace }: { workspace: Workspace }) {
   // sidebar entries (convenience) and to gate what actually renders below
   // (the boundary that matters - visiting a hidden page still hits this).
   const role = effectiveRole(profile, isAuthEnabled);
-  const visibleNavItems = navItems.filter((item) => can(role, item.capability));
+  // Dashboard/Sales Upload/Ads Upload/Sales Report/Page Report are gated by
+  // the additive multi-role + multi-workspace model (lib/permissions);
+  // Settings/Users stay on the legacy single-role capability table -
+  // untouched, out of scope for this change.
+  const pageAccess: Partial<Record<PageKey, boolean>> = {
+    dashboard: !isAuthEnabled || canViewDashboard(profile, workspace),
+    "sales-upload": !isAuthEnabled || canUpload(profile, workspace),
+    "ads-upload": !isAuthEnabled || canUpload(profile, workspace),
+    "sales-report": !isAuthEnabled || canViewSalesReports(profile, workspace),
+    "page-report": !isAuthEnabled || canViewAdsReports(profile, workspace),
+    settings: can(role, "settings.view"),
+    users: can(role, "users.view")
+  };
+  const visibleNavItems = navItems.filter((item) => pageAccess[item.key]);
   const activeNavItem = navItems.find((item) => item.key === page);
-  const hasPageAccess = activeNavItem ? can(role, activeNavItem.capability) : false;
+  const hasPageAccess = activeNavItem ? Boolean(pageAccess[page]) : false;
 
   return (
     <div className={`app-shell ${theme}`} dir="rtl">

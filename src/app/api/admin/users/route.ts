@@ -10,6 +10,21 @@ export const fetchCache = "force-no-store";
 
 const VALID_ROLES = ["owner", "admin", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
 const VALID_WORKSPACES = ["cosmetics", "home"];
+const VALID_MULTI_ROLES = ["data_entry", "sales_manager", "marketing_manager"];
+
+const parseRoles = (value: unknown): string[] => {
+  const list = Array.isArray(value) ? value.map(String) : [];
+  const invalid = list.find((item) => !VALID_MULTI_ROLES.includes(item));
+  if (invalid) throw new ApiError(400, `Invalid role: ${invalid}`);
+  return list;
+};
+
+const parseWorkspaces = (value: unknown): string[] => {
+  const list = Array.isArray(value) ? value.map(String) : [];
+  const invalid = list.find((item) => !VALID_WORKSPACES.includes(item));
+  if (invalid) throw new ApiError(400, `Invalid workspace: ${invalid}`);
+  return list;
+};
 
 export async function GET(request: Request) {
   try {
@@ -43,6 +58,8 @@ export async function GET(request: Request) {
         displayName: profile?.display_name ?? user.email ?? "",
         role: profile?.role ?? "viewer",
         workspace: profile?.workspace ?? "cosmetics",
+        roles: Array.isArray(profile?.roles) ? profile.roles : [],
+        workspaces: Array.isArray(profile?.workspaces) && profile.workspaces.length ? profile.workspaces : [profile?.workspace ?? "cosmetics"],
         active: profile ? Boolean(profile.active) : true,
         lastSignInAt: user.last_sign_in_at ?? null,
         createdAt: profile?.created_at ?? user.created_at
@@ -64,6 +81,8 @@ export async function POST(request: Request) {
     const displayName = String(body?.displayName ?? "").trim() || email;
     const role = String(body?.role ?? "viewer");
     const workspace = String(body?.workspace ?? "cosmetics");
+    const roles = parseRoles(body?.roles);
+    const workspaces = parseWorkspaces(body?.workspaces?.length ? body.workspaces : [workspace]);
     if (!email) throw new ApiError(400, "Email is required.");
     if (!VALID_ROLES.includes(role)) throw new ApiError(400, `Invalid role: ${role}`);
     if (!VALID_WORKSPACES.includes(workspace)) throw new ApiError(400, `Invalid workspace: ${workspace}`);
@@ -82,7 +101,7 @@ export async function POST(request: Request) {
 
     const { error: profileError } = await serviceClient
       .from("profiles")
-      .upsert({ id: userId, display_name: displayName, email, role, workspace, active: true }, { onConflict: "id" });
+      .upsert({ id: userId, display_name: displayName, email, role, workspace, roles, workspaces, active: true }, { onConflict: "id" });
     if (profileError) throw new ApiError(500, profileError.message);
 
     return NextResponse.json({
@@ -91,6 +110,8 @@ export async function POST(request: Request) {
       displayName,
       role,
       workspace,
+      roles,
+      workspaces,
       active: true,
       lastSignInAt: null,
       createdAt: invited.user.created_at

@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Trash2, UserPlus, Users as UsersIcon } from "lucide-react";
-import type { Role, Workspace } from "../../types";
+import { Pencil, Save, Trash2, UserPlus, Users as UsersIcon, X } from "lucide-react";
+import type { MultiRole, Role, Workspace } from "../../types";
 import { isAuthEnabled } from "../../lib/auth";
-import { allRoles, ROLE_CAPABILITIES, can, roleLabels } from "../../lib/permissions";
+import { allMultiRoles, allRoles, multiRoleLabels, ROLE_CAPABILITIES, can, roleLabels } from "../../lib/permissions";
 import { WORKSPACES } from "../../lib/workspaces";
-import { Badge, SimpleTable } from "../../lib/ui";
+import { Badge, MultiSelectDropdown, SimpleTable } from "../../lib/ui";
 import { deleteUser, inviteUser, listAllUsers, updateUser, type AdminUser } from "../../lib/adminUsers";
 
 export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
@@ -17,8 +17,12 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [role, setRole] = useState<Role>("viewer");
-  const [workspace, setWorkspace] = useState<Workspace>("cosmetics");
+  const [workspaces, setWorkspaces] = useState<Workspace[]>(["cosmetics"]);
+  const [roles, setRoles] = useState<MultiRole[]>([]);
   const [creating, setCreating] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editWorkspaces, setEditWorkspaces] = useState<Workspace[]>([]);
+  const [editRoles, setEditRoles] = useState<MultiRole[]>([]);
 
   const refresh = () => {
     if (!isAuthEnabled) {
@@ -39,12 +43,13 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
     setCreating(true);
     setError("");
     try {
-      await inviteUser({ email: email.trim(), displayName: displayName.trim() || email.trim(), role, workspace });
+      await inviteUser({ email: email.trim(), displayName: displayName.trim() || email.trim(), role, workspace: workspaces[0] ?? "cosmetics", roles, workspaces });
       setMessage(`تم إرسال دعوة إلى ${email.trim()}.`);
       setEmail("");
       setDisplayName("");
       setRole("viewer");
-      setWorkspace("cosmetics");
+      setWorkspaces(["cosmetics"]);
+      setRoles([]);
       refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -63,11 +68,18 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
     }
   };
 
-  const changeWorkspace = async (id: string, newWorkspace: Workspace) => {
+  const startEdit = (user: AdminUser) => {
+    setEditingId(user.id);
+    setEditWorkspaces(user.workspaces?.length ? user.workspaces : [user.workspace]);
+    setEditRoles(user.roles ?? []);
+  };
+
+  const saveEdit = async (id: string) => {
     setError("");
     try {
-      await updateUser(id, { workspace: newWorkspace });
-      setUsers((prev) => prev.map((item) => (item.id === id ? { ...item, workspace: newWorkspace } : item)));
+      await updateUser(id, { workspaces: editWorkspaces, roles: editRoles });
+      setUsers((prev) => prev.map((item) => (item.id === id ? { ...item, workspaces: editWorkspaces, roles: editRoles } : item)));
+      setEditingId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -107,7 +119,7 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
           <UsersIcon />
           <div>
             <h2>Users</h2>
-            <p>إدارة المستخدمين والأدوار - متاحة لـ Owner فقط. الحذف نهائي ويحرر البريد الإلكتروني لدعوة جديدة لاحقًا.</p>
+            <p>إدارة المستخدمين، Workspace Access، والـ Roles - متاحة لـ Owner فقط. الحذف نهائي ويحرر البريد الإلكتروني لدعوة جديدة لاحقًا.</p>
           </div>
         </div>
         {!isAuthEnabled && (
@@ -134,12 +146,18 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
               {allRoles.map((item) => <option key={item} value={item}>{roleLabels[item]}</option>)}
             </select>
           </label>
-          <label>
-            Workspace
-            <select value={workspace} onChange={(event) => setWorkspace(event.target.value as Workspace)} disabled={!isAuthEnabled}>
-              {WORKSPACES.map((item) => <option key={item.key} value={item.key}>{item.emoji} {item.label}</option>)}
-            </select>
-          </label>
+          <MultiSelectDropdown
+            label="Workspace Access"
+            options={WORKSPACES.map((item) => item.key)}
+            selected={workspaces}
+            onChange={(value) => setWorkspaces(value as Workspace[])}
+          />
+          <MultiSelectDropdown
+            label="Roles"
+            options={allMultiRoles}
+            selected={roles}
+            onChange={(value) => setRoles(value as MultiRole[])}
+          />
           <button className="primary" disabled={!isAuthEnabled || creating || !email.trim()} onClick={createUser}>
             <UserPlus size={18} />
             {creating ? "..." : "Create User"}
@@ -148,16 +166,18 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
         <p className="status-line">إنشاء المستخدم يرسل دعوة بالبريد الإلكتروني لتعيين كلمة المرور - لا تُدخل أي كلمة مرور هنا.</p>
       </section>
 
-      <SimpleTable title="Users" headers={["Name", "Email", "Role", "Workspace", "Status", "Last Login", "Actions"]}>
+      <SimpleTable title="Users" headers={["Name", "Email", "Role", "Workspace Access", "Roles", "Status", "Last Login", "Actions"]}>
         {loading ? (
-          <tr><td colSpan={7}>Loading...</td></tr>
+          <tr><td colSpan={8}>Loading...</td></tr>
         ) : users.length === 0 ? (
-          <tr><td colSpan={7}>لا يوجد مستخدمون بعد.</td></tr>
+          <tr><td colSpan={8}>لا يوجد مستخدمون بعد.</td></tr>
         ) : (
           users.map((user) => {
             const ownerCount = users.filter((item) => item.role === "owner").length;
             const isSelf = user.id === currentUserId;
             const isLastOwner = user.role === "owner" && ownerCount <= 1;
+            const isEditing = editingId === user.id;
+            const userWorkspaces = user.workspaces?.length ? user.workspaces : [user.workspace];
             return (
               <tr key={user.id}>
                 <td>{user.displayName}</td>
@@ -168,19 +188,58 @@ export function UsersPage({ currentUserId }: { currentUserId: string | null }) {
                   </select>
                 </td>
                 <td>
-                  <select
-                    value={user.workspace}
-                    disabled={user.role === "owner"}
-                    title={user.role === "owner" ? "Owner يصل إلى كل مساحات العمل بغض النظر عن هذا الحقل." : undefined}
-                    onChange={(event) => changeWorkspace(user.id, event.target.value as Workspace)}
-                  >
-                    {WORKSPACES.map((item) => <option key={item.key} value={item.key}>{item.emoji} {item.label}</option>)}
-                  </select>
+                  {isEditing ? (
+                    <MultiSelectDropdown
+                      label=""
+                      options={WORKSPACES.map((item) => item.key)}
+                      selected={editWorkspaces}
+                      onChange={(value) => setEditWorkspaces(value as Workspace[])}
+                    />
+                  ) : user.role === "owner" ? (
+                    <Badge text="All workspaces" />
+                  ) : userWorkspaces.length ? (
+                    userWorkspaces.map((item) => <Badge key={item} text={WORKSPACES.find((ws) => ws.key === item)?.label ?? item} />)
+                  ) : (
+                    <Badge text="None" />
+                  )}
+                </td>
+                <td>
+                  {isEditing ? (
+                    <MultiSelectDropdown
+                      label=""
+                      options={allMultiRoles}
+                      selected={editRoles}
+                      onChange={(value) => setEditRoles(value as MultiRole[])}
+                    />
+                  ) : user.role === "owner" ? (
+                    <Badge text="All roles" />
+                  ) : user.roles?.length ? (
+                    user.roles.map((item) => <Badge key={item} text={multiRoleLabels[item]} />)
+                  ) : (
+                    <Badge text="None" />
+                  )}
                 </td>
                 <td><Badge text={user.active ? "Active" : "Disabled"} /></td>
                 <td>{user.lastSignInAt ? new Date(user.lastSignInAt).toLocaleString("ar-EG") : "لم يسجل دخول بعد"}</td>
                 <td className="actions">
-                  <button className="ghost" onClick={() => renameUser(user.id, user.displayName)}>Edit</button>
+                  {isEditing ? (
+                    <>
+                      <button className="ghost" onClick={() => saveEdit(user.id)}>
+                        <Save size={16} />
+                        Save
+                      </button>
+                      <button className="ghost" onClick={() => setEditingId(null)}>
+                        <X size={16} />
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button className="ghost" disabled={user.role === "owner"} onClick={() => startEdit(user)}>
+                      <Pencil size={16} />
+                      Edit
+                    </button>
+                  )}
+                  <button className="ghost" onClick={() => renameUser(user.id, user.displayName)}>Rename</button>
                   <button
                     className="ghost"
                     disabled={isSelf || isLastOwner}

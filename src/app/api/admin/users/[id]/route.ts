@@ -7,6 +7,7 @@ export const fetchCache = "force-no-store";
 
 const VALID_ROLES = ["owner", "admin", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
 const VALID_WORKSPACES = ["cosmetics", "home"];
+const VALID_MULTI_ROLES = ["data_entry", "sales_manager", "marketing_manager"];
 // Effectively permanent (~100 years) - GoTrue's ban mechanism, used instead
 // of deleting the user. "none" lifts it. Matches "do not permanently delete
 // users": this is fully reversible via Enable.
@@ -28,6 +29,18 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       const workspace = String(body.workspace);
       if (!VALID_WORKSPACES.includes(workspace)) throw new ApiError(400, `Invalid workspace: ${workspace}`);
       patch.workspace = workspace;
+    }
+    if (body?.roles !== undefined) {
+      const roles = Array.isArray(body.roles) ? body.roles.map(String) : [];
+      const invalidRole = roles.find((item: string) => !VALID_MULTI_ROLES.includes(item));
+      if (invalidRole) throw new ApiError(400, `Invalid role: ${invalidRole}`);
+      patch.roles = roles;
+    }
+    if (body?.workspaces !== undefined) {
+      const workspaces = Array.isArray(body.workspaces) ? body.workspaces.map(String) : [];
+      const invalidWorkspace = workspaces.find((item: string) => !VALID_WORKSPACES.includes(item));
+      if (invalidWorkspace) throw new ApiError(400, `Invalid workspace: ${invalidWorkspace}`);
+      patch.workspaces = workspaces;
     }
     if (body?.displayName !== undefined) {
       patch.display_name = String(body.displayName).trim();

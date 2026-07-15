@@ -1,4 +1,5 @@
-import type { Capability, Profile, Role } from "../../types";
+import type { Capability, MultiRole, Profile, Role, Workspace } from "../../types";
+import { canAccessWorkspace } from "../workspaces";
 
 // Section 13 of docs/ARCHITECTURE.md. Proposed defaults - confirm/adjust with
 // the Owner before treating this as final; this is the one source of truth
@@ -128,3 +129,37 @@ export const roleLabels: Record<Role, string> = {
 };
 
 export const allRoles: Role[] = ["owner", "admin", "marketing_manager", "media_buyer", "sales_manager", "data_entry", "viewer"];
+
+// Additive multi-role model: workspace access and roles are separate axes.
+// Owner always bypasses both. These are the ONLY gates for Sales/Ads
+// Upload, Sales/Page Report, and Dashboard - Settings/Users/Backup/Audit
+// stay governed by the legacy `role`/ROLE_CAPABILITIES above, untouched.
+export const allMultiRoles: MultiRole[] = ["data_entry", "sales_manager", "marketing_manager"];
+
+export const multiRoleLabels: Record<MultiRole, string> = {
+  data_entry: "Data Entry",
+  sales_manager: "Sales Manager",
+  marketing_manager: "Marketing Manager"
+};
+
+export const hasWorkspaceAccess = (profile: Profile | null, workspace: Workspace): boolean =>
+  Boolean(profile) && canAccessWorkspace(profile!.role, profile!.workspaces, workspace);
+
+export const hasRole = (profile: Profile | null, workspace: Workspace, role: MultiRole): boolean =>
+  Boolean(profile) && (profile!.role === "owner" || (hasWorkspaceAccess(profile, workspace) && (profile!.roles ?? []).includes(role)));
+
+export const hasAnyRole = (profile: Profile | null, workspace: Workspace, roles: MultiRole[]): boolean =>
+  Boolean(profile) && (profile!.role === "owner" || (hasWorkspaceAccess(profile, workspace) && roles.some((item) => (profile!.roles ?? []).includes(item))));
+
+export const canUpload = (profile: Profile | null, workspace: Workspace): boolean => hasRole(profile, workspace, "data_entry");
+
+export const canViewDashboard = (profile: Profile | null, workspace: Workspace): boolean =>
+  hasAnyRole(profile, workspace, ["data_entry", "sales_manager", "marketing_manager"]);
+
+export const canViewSalesReports = (profile: Profile | null, workspace: Workspace): boolean =>
+  hasAnyRole(profile, workspace, ["sales_manager", "marketing_manager"]);
+
+export const canViewAdsReports = (profile: Profile | null, workspace: Workspace): boolean =>
+  hasAnyRole(profile, workspace, ["sales_manager", "marketing_manager"]);
+
+export const canManageUsers = (profile: Profile | null): boolean => profile?.role === "owner";
