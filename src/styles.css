@@ -128,6 +128,13 @@ input[type="file"] {
   color: #94a3b8;
 }
 
+.switch-workspace {
+  width: 100%;
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
 .sidebar nav {
   display: grid;
   gap: 8px;

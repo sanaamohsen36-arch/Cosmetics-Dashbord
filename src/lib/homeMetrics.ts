@@ -4,6 +4,12 @@ import type { DateRange, HomeAppData, HomeSalesBySalesperson, HomeSalesByPage, S
 // (Cosmetics, untouched) but over Home's own data shape (shift-based, no
 // Brand). Every filter here recalculates every KPI/chart/table from the
 // same filtered dataset, per spec.
+// Phase 3 (Home Ads Upload): the Page names Home Ads is matched against -
+// every distinct Page name already seen in Home Sales, mirroring how
+// Cosmetics derives its Brand list from Sales Page names.
+export const getEffectiveHomePageNames = (data: HomeAppData): string[] =>
+  [...new Set(data.pages.map((row) => row.pageName).filter(Boolean))].sort();
+
 export interface HomeFilters {
   range: DateRange;
   shift: "all" | ShiftType;

@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import {
+  ArrowLeftRight,
   BarChart3,
   FolderOpen,
   LayoutDashboard,
@@ -36,11 +38,13 @@ import { HomeSalesUploadPage } from "./features/home-sales-upload";
 import { HomeDashboardPage } from "./features/home-dashboard";
 import { HomeSalesReportPage } from "./features/home-sales-report";
 import { HomePageReportPage } from "./features/home-page-report";
+import { HomeAdsFolderPage } from "./features/home-ads-upload";
+import { HomeSettingsPage } from "./features/home-settings";
 
-// Pages with a real Home implementation so far (Phase 2) - anything else
-// (Ads Upload, Settings, and any future workspace entirely) falls back to
-// ComingSoonPage. Never branch on a workspace name directly elsewhere.
-const HOME_IMPLEMENTED_PAGES = new Set<PageKey>(["dashboard", "sales-upload", "sales-report", "page-report"]);
+// Pages with a real Home implementation so far (Phase 3) - anything else
+// (any future workspace's unbuilt pages) falls back to ComingSoonPage.
+// Never branch on a workspace name directly elsewhere.
+const HOME_IMPLEMENTED_PAGES = new Set<PageKey>(["dashboard", "sales-upload", "ads-upload", "sales-report", "page-report", "settings"]);
 
 const navItems: Array<{ key: PageKey; label: string; icon: ReactNode; capability: Capability }> = [
   { key: "dashboard", label: "Home Dashboard", icon: <LayoutDashboard size={18} />, capability: "dashboard.view" },
@@ -66,6 +70,7 @@ export default function DashboardApp({ workspace }: { workspace: Workspace }) {
   const [periodMode, setPeriodMode] = useState<"day" | "week" | "month">("day");
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const { profile, authChecked, authError, setProfile } = useAuthGate();
+  const router = useRouter();
   const isCosmetics = workspace === "cosmetics";
   const isHome = workspace === "home";
 
@@ -119,6 +124,15 @@ export default function DashboardApp({ workspace }: { workspace: Workspace }) {
             <small>Sales + Ads BI - {workspaceConfig(workspace).emoji} {workspaceConfig(workspace).label}</small>
           </div>
         </div>
+        {/* Only Owner ever sees this - a non-owner has exactly one workspace,
+            so there is nothing to switch to (WorkspaceSelector would just
+            bounce them straight back here anyway). */}
+        {role === "owner" && (
+          <button className="ghost switch-workspace" onClick={() => router.push("/workspace")}>
+            <ArrowLeftRight size={16} />
+            Switch Workspace
+          </button>
+        )}
         <nav>
           {visibleNavItems.map((item) => (
             <button key={item.key} className={page === item.key ? "active" : ""} onClick={() => setPage(item.key)}>
@@ -170,8 +184,10 @@ export default function DashboardApp({ workspace }: { workspace: Workspace }) {
         {hasPageAccess && isCosmetics && page === "settings" && <SettingsPage data={data} commitData={commitData} profile={profile} />}
         {hasPageAccess && isHome && page === "dashboard" && <HomeDashboardPage data={homeData} range={range} />}
         {hasPageAccess && isHome && page === "sales-upload" && <HomeSalesUploadPage data={homeData} setData={setHomeData} />}
+        {hasPageAccess && isHome && page === "ads-upload" && <HomeAdsFolderPage data={homeData} setData={setHomeData} />}
         {hasPageAccess && isHome && page === "sales-report" && <HomeSalesReportPage data={homeData} range={range} setRange={setRange} />}
         {hasPageAccess && isHome && page === "page-report" && <HomePageReportPage data={homeData} range={range} setRange={setRange} />}
+        {hasPageAccess && isHome && page === "settings" && <HomeSettingsPage data={homeData} />}
         {hasPageAccess &&
           page !== "users" &&
           !isCosmetics &&

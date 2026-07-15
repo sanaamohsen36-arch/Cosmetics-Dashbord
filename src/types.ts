@@ -386,8 +386,59 @@ export interface HomeSalesByPage {
   createdAt: string;
 }
 
+// Phase 3 (Home Ads Upload). Mirrors AdsRawFile/AdsRow above exactly, with
+// Cosmetics' Brand ("salesPlatformName") replaced by Home's own Page name
+// ("pageName") - Home has no Brand concept, so Ads are matched to Home Sales
+// by Page name instead.
+export interface HomeAdsRawFile {
+  id: string;
+  workspace: "home";
+  fileName: string;
+  filePath: string;
+  uploadedAt: string;
+  reportDate: string;
+  adsPlatform: AdsPlatform;
+  pageName: string;
+  parsingStatus: "success" | "failed";
+  createdAt: string;
+  version: number;
+  isCurrent: boolean;
+  supersededAt?: string | null;
+  supersededBy?: string | null;
+}
+
+export interface HomeAdsRow {
+  id: string;
+  workspace: "home";
+  reportDate: string;
+  adsPlatform: AdsPlatform;
+  pageName: string;
+  campaignName: string;
+  adsetName: string;
+  adName: string;
+  spend: number;
+  impressions: number;
+  reach: number;
+  clicks: number;
+  ctr: number;
+  cpc: number;
+  cpm: number;
+  leads: number;
+  resultsCount?: number;
+  costPerResult?: number;
+  messagesCount?: number;
+  commentsCount?: number;
+  purchases: number;
+  purchaseValue: number;
+  sourceFileId: string;
+  createdAt: string;
+}
+
 export interface HomeAppData {
   rawFiles: HomeSalesRawFile[];
   salespeople: HomeSalesBySalesperson[];
   pages: HomeSalesByPage[];
+  adsRawFiles: HomeAdsRawFile[];
+  metaAds: HomeAdsRow[];
+  tiktokAds: HomeAdsRow[];
 }
